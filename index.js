@@ -89,7 +89,7 @@ function mergeSegmentsToSentences(segments) {
   let currentWords = [];
   let currentStart = null;
 
-  const PAUSE_THRESHOLD = 0.75;
+  const PAUSE_THRESHOLD = 3;
 
   for (let i = 0; i < allWords.length; i++) {
     const w = allWords[i];
@@ -117,7 +117,7 @@ function mergeSegmentsToSentences(segments) {
 
       // 🔑 gap-based extension (your previous improvement)
       const gap = nextWord.start - sentenceEndTime;
-      let extension = Math.min(gap / 2, 1);
+      let extension = Math.min(gap / 2, 0.2);
 
       const sentenceText = currentWords.map(x => x.word).join('').trim();
 
@@ -533,24 +533,37 @@ function getDuration(file) {
 
     args.push('-i', p.translatedFile);
 
-    const originalDuration = p.end - p.start;
+    // const originalDuration = getDuration(p.file);
+    const OFFSET = 0.2;
+    const nextWord = allWords.find(w => w.start > p.end);
+    const nextTime = nextWord ? nextWord.start - OFFSET : p.end + OFFSET;
+    const originalDuration = p.end - nextTime; 
     const speed = translatedDuration / originalDuration;
     const startMs = Math.round(p.start * 1000);
 
     // 🔧 atempo chain (same as you had)
     const atempoFilters = [];
-    let remainingSpeed = speed;
+    // let remainingSpeed = speed;
 
-    while (remainingSpeed > 1.5) {
+    /* while (remainingSpeed > 1.5) {
       atempoFilters.push('atempo=1.5');
       remainingSpeed /= 1.5;
     }
     while (remainingSpeed < 0.75) {
       atempoFilters.push('atempo=0.75');
       remainingSpeed /= 0.75;
-    }
+    } */
 
-    atempoFilters.push(`atempo=${remainingSpeed.toFixed(4)}`);
+console.log({
+  file: p.translatedFile,
+  translatedDuration: translatedDuration,
+  slot: p.end - p.start,
+  originalDuration,
+  originalDurationFile: getDuration(p.file)
+});
+
+    // atempoFilters.push(`atempo=${remainingSpeed.toFixed(4)}`);
+    atempoFilters.push(`atempo=${Math.max(1, speed).toFixed(4)}`);
 
     const adelayFilter = `adelay=${startMs}|${startMs}`;
 
