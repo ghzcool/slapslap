@@ -6,6 +6,8 @@ const INPUT_VIDEO = process.argv[2];
 const skipArg = process.argv[3];
 let SKIP_TO_STEP = 0;
 
+const TARGET_LANGUAGE = 'english';
+
 if (skipArg) {
   const parsed = parseInt(skipArg);
   if (isNaN(parsed) || parsed < 1 || parsed > 9) {
@@ -148,78 +150,6 @@ function mergeSegmentsToSentences(segments) {
   return merged;
 }
 
-/* function mergeSegmentsToSentences(segments) {
-  const merged = [];
-  let id = 0;
-
-  const allWords = [];
-
-  for (const seg of segments) {
-    for (const w of seg.words || []) {
-      allWords.push(w);
-    }
-  }
-
-  const isSentenceEnd = (word) =>
-    /[.!?]["']?$/.test(word);
-
-  let currentWords = [];
-  let currentStart = null;
-
-  for (let i = 0; i < allWords.length; i++) {
-    const w = allWords[i];
-    const cleanWord = w.word.trim();
-
-    if (!currentWords.length) {
-      currentStart = w.start;
-    }
-
-    currentWords.push(w);
-
-    const isEnd = isSentenceEnd(cleanWord);
-    const nextWord = allWords[i + 1];
-
-    if (isEnd && nextWord) {
-      const sentenceEndTime = w.end;
-
-      // 🔑 compute gap to next sentence start
-      const gap = nextWord.start - sentenceEndTime;
-
-      let extension = gap / 2;
-
-      if (extension > 1) extension = 1; // cap at 1 second
-
-      const sentenceText = currentWords.map(x => x.word).join('').trim();
-
-      merged.push({
-        id: id++,
-        seek: 0,
-        start: currentStart,
-        end: sentenceEndTime + extension, // 🎯 extended boundary
-        text: sentenceText
-      });
-
-      currentWords = [];
-      currentStart = null;
-    }
-  }
-
-  // leftover
-  if (currentWords.length) {
-    const sentenceText = currentWords.map(x => x.word).join('').trim();
-
-    merged.push({
-      id: id++,
-      seek: 0,
-      start: currentStart,
-      end: currentWords[currentWords.length - 1].end,
-      text: sentenceText
-    });
-  }
-
-  return merged;
-} */
-
 async function step2_speechToText() {
   console.log('\n=== Step 2: Speech to text ===');
   run(`set PYTHONWARNINGS=ignore && whisper "${voiceFile}" --model base --output_format json --word_timestamps True`); // --language en
@@ -259,8 +189,6 @@ async function step3_parseTranscriptAndCut() {
 
 const rules = 'This text is generated from speech recognition and may contain errors. Make corrections to this text and restore it as good as possible. Keep same style but write numbers as text. THIS IS IMPORTANT: Do not write numbers as numbers "с 2017 года" should be "с две тысячи семнадцатого года"! This translation will be used for dub voiceover so keep length very similar to original (not text length but audio length) adapt translation or rephrase if needed. Make it sound natural, like people say. IMPORTANT: Do not translate names and titles. Do not translate technical terms that you dont understand in context. Use words instead of numbers like "четвёртое июля" and not "4 июля". Voice will be generated for this text so please capitalize where stress should be in words.';
 
-let baseContext = null;
-
 async function initContext(fullText) {
   const response = await fetch('http://localhost:1234/v1/chat/completions', {
     method: 'POST',
@@ -270,27 +198,22 @@ async function initContext(fullText) {
       messages: [
         {
           role: 'system',
-          content: 'Translate text to russian. Output only the translation, nothing else.'
-          // content: 'Read and understand the following text. Do not output anything. This text is generated from speech recognition and may contain errors. Just try to understand the meaning as best as you can. And try to predict what was interpreted wrong. This is important to create a good context for later translation.'
+          content: 'rules: ' + rules
         },
         {
           role: 'system',
-          content: 'rules: ' + rules
+          content: 'Translate text to ' + TARGET_LANGUAGE + '. Output only the translation, nothing else.'
         },
         {
           role: 'user',
           content: fullText
         }
       ],
-      // max_tokens: 1, // force minimal output
       temperature: 0
     })
   });
 
   const data = await response.json();
-
-  // 🔑 this is the important part
-  // baseContext = data.context;
 
   return data.choices[0].message.content.trim();
 }
@@ -302,9 +225,6 @@ async function translateWithLLM(text, fullText, translatedFullText) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'llama-3',
-
-        // 🔑 reuse base context (DO NOT overwrite it globally)
-        // context: baseContext,
 
         messages: [
           {
@@ -321,7 +241,7 @@ async function translateWithLLM(text, fullText, translatedFullText) {
           },
           {
             role: 'system',
-            content: 'Translate this part to Russian. Output only translation for this part and nothing else.'
+            content: 'Translate this part to ' + TARGET_LANGUAGE + '. Output only translation AND ONLY FOR THIS PART and nothing else. IMPORTANT: translate only this part! Translation should not be longer than original text.'
           },
           {
             role: 'user',
@@ -343,29 +263,6 @@ async function translateWithLLM(text, fullText, translatedFullText) {
     return text;
   }
 }
-
-/* async function translateWithLLM(text) {
-  try {
-    const response = await fetch('http://localhost:1234/v1/chat/completions', { // GET context with full text then translate one by one
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'llama-3',
-        messages: [
-          { role: 'system', content: 'Translate the following text to Russian. Only output the translation, nothing else. Keep length similar to original.' },
-          { role: 'user', content: text }
-        ],
-        max_tokens: 1000,
-        stream: false
-      })
-    });
-    const data = await response.json();
-    return data.choices[0].message.content.trim();
-  } catch (error) {
-    console.error('Translation failed:', error.message);
-    return text; // Fallback to original text
-  }
-} */
 
 async function step5_translate() {
   if (!loadParts()) throw new Error('No parts.json');
@@ -391,18 +288,6 @@ async function step5_translate() {
   saveParts();
 }
 
-/* async function step5_translate() {
-  if (!loadParts()) throw new Error('No parts.json');
-  console.log(`\n=== Step 5: Translate ${parts.length} parts ===`);
-  for (const p of parts) {
-    if (p.translated) continue;
-    console.log(`  ${p.text.substring(0, 50)}...`);
-    p.translated = await translateWithLLM(p.text);
-    console.log(`  ${p.translated.substring(0, 50)}...`);
-  }
-  saveParts();
-} */
-
 async function step6_generateAudio() {
   if (!loadParts()) throw new Error('No parts.json');
   if (!fs.existsSync(TRANS_DIR)) fs.mkdirSync(TRANS_DIR, { recursive: true });
@@ -411,19 +296,11 @@ async function step6_generateAudio() {
     const out = path.join(TRANS_DIR, path.basename(p.file));
     const duration = Math.ceil(p.end - p.start);
     const textEscaped = p.translated.replace(/"/g, '\\"');
-    const cmd = `generate_audio --model-dir models/base-1.7b --text "${textEscaped}" --ref-audio "${p.file}" --language russian --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
+    const cmd = `generate_audio --model-dir models/base-1.7b --text "${textEscaped}" --ref-audio "${p.file}" --language ${TARGET_LANGUAGE} --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
     console.log(`  Generating (${duration}s): ${p.translated}`);
     run(cmd);
   }
 }
-
-/* async function step7_joinAudio() {
-  if (!loadParts()) throw new Error('No parts.json');
-  console.log('\n=== Step 7: Join translated audio ===');
-  const listFile = path.join(WORK_DIR, 'audio_list.txt');
-  fs.writeFileSync(listFile, parts.map(p => `file '${path.resolve(TRANS_DIR, path.basename(p.file)).replace(/\\/g, '/')}'`).join('\n'));
-  run(`ffmpeg -f concat -safe 0 -i "${listFile}" -c copy "${translatedVoiceFile}" -y`);
-} */
 
 function getDuration(file) {
   try {
@@ -434,69 +311,6 @@ function getDuration(file) {
     return null;
   }
 }
-
-/* async function step7_joinAudio() {
-  if (!loadParts()) throw new Error('No parts.json');
-  
-  const validParts = [];
-  for (const p of parts) {
-    const translatedFile = '.' + path.join(TRANS_DIR, path.basename(p.file)).split(__dirname)[1];
-    if (!fs.existsSync(translatedFile)) {
-      console.warn(`  WARNING: Missing translated file for ${path.basename(p.file)}`, translatedFile);
-      continue;
-    }
-    validParts.push({ ...p, translatedFile });
-  }
-
-  if (validParts.length === 0) throw new Error('No translated audio files found');
-  console.log(`\n=== Step 7: Join translated audio (${validParts.length} parts) ===`);
-
-  const inputs = [];
-  const filterChains = [];
-  const partLabels = [];
-
-  validParts.forEach((p, inputIdx) => {
-    inputs.push(`-i "${p.translatedFile}"`);
-    const originalDuration = p.end - p.start;
-    const translatedDuration = getDuration(p.translatedFile);
-    if (!translatedDuration) {
-      console.warn(`  WARNING: Could not read duration for ${path.basename(p.translatedFile)}, skipping`);
-      return;
-    }
-
-    const speed = translatedDuration / originalDuration;
-    const startMs = Math.round(p.start * 1000);
-
-    const atempoFilters = [];
-    let remainingSpeed = speed;
-    while (remainingSpeed > 2.0) {
-      atempoFilters.push('atempo=2.0');
-      remainingSpeed /= 2.0;
-    }
-    while (remainingSpeed < 0.5) {
-      atempoFilters.push('atempo=0.5');
-      remainingSpeed /= 0.5;
-    }
-    atempoFilters.push(`atempo=${remainingSpeed.toFixed(4)}`);
-
-    const adelayFilter = `adelay=${startMs}|${startMs}`;
-    const filterChain = `[${inputIdx}:a]${atempoFilters.join(',')},${adelayFilter}[part${inputIdx}]`;
-    
-    filterChains.push(filterChain);
-    partLabels.push(`[part${inputIdx}]`);
-  });
-
-  if (partLabels.length === 0) throw new Error('No valid parts to join');
-
-  const mixFilter = `${partLabels.join('')}amix=inputs=${partLabels.length}:normalize=0[out]`;
-  filterChains.push(mixFilter);
-
-  const filterComplex = filterChains.join(';');
-  const cmd = `ffmpeg ${inputs.join(' ')} -filter_complex "${filterComplex}" -map "[out]" "${translatedVoiceFile}" -y`;
-
-  console.log(`  Joining ${partLabels.length} parts...`);
-  run(cmd);
-} */
 
 async function step7_joinAudio() {
   if (!loadParts()) throw new Error('No parts.json');
@@ -552,18 +366,7 @@ async function step7_joinAudio() {
     const speed = translatedDuration / originalDuration;
     const startMs = Math.round(p.start * 1000);
 
-    // 🔧 atempo chain (same as you had)
     const atempoFilters = [];
-    // let remainingSpeed = speed;
-
-    /* while (remainingSpeed > 1.5) {
-      atempoFilters.push('atempo=1.5');
-      remainingSpeed /= 1.5;
-    }
-    while (remainingSpeed < 0.75) {
-      atempoFilters.push('atempo=0.75');
-      remainingSpeed /= 0.75;
-    } */
 
 console.log({
   file: p.translatedFile,
@@ -573,8 +376,9 @@ console.log({
   originalDurationFile: getDuration(p.file)
 });
 
-    // atempoFilters.push(`atempo=${remainingSpeed.toFixed(4)}`);
-    atempoFilters.push(`atempo=${Math.max(1, speed).toFixed(4)}`);
+    const safeSpeed = Math.max(1, speed);
+
+    atempoFilters.push(`atempo=${safeSpeed.toFixed(4)}`);
 
     const adelayFilter = `adelay=${startMs}|${startMs}`;
 
@@ -589,7 +393,6 @@ console.log({
 
   if (partLabels.length === 0) throw new Error('No valid parts to join');
 
-  // 🎯 важно: duration=longest чтобы не обрезалось
   const mixFilter =
     `${partLabels.join('')}amix=inputs=${partLabels.length}:normalize=0:duration=longest[out]`;
 
