@@ -1,0 +1,1 @@
+download and put qwen3-tts base-1.7b in this folder

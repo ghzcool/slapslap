@@ -1,0 +1,12 @@
+{
+  "name": "slapslap",
+  "version": "1.0.0",
+  "description": "Translates video by replacing voices with translated voices using AI's",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "fluent-ffmpeg": "^2.1.2"
+  }
+}
