@@ -257,7 +257,7 @@ async function step3_parseTranscriptAndCut() {
   saveParts();
 }
 
-const rules = 'This text is generated from speech recognition and may contain errors. Make corrections to this text and restore it as good as possible. Keep same style but write numbers as text. THIS IS IMPORTANT: Do not write numbers as numbers "с 2017 года" should be "с две тысячи семнадцатого года"! This translation will be used for dub voiceover so keep length similar to original adapt translation or rephrase if needed. IMPORTANT: Do not translate names and titles. Do not translate technical terms that might be translated wrong without context. If you are not sure about the meaning, just keep it in original language. Use words instead of numbers like "четвёртое июля" and not "4 июля".';
+const rules = 'This text is generated from speech recognition and may contain errors. Make corrections to this text and restore it as good as possible. Keep same style but write numbers as text. THIS IS IMPORTANT: Do not write numbers as numbers "с 2017 года" should be "с две тысячи семнадцатого года"! This translation will be used for dub voiceover so keep length very similar to original (not text length but audio length) adapt translation or rephrase if needed. Make it sound natural, like people say. IMPORTANT: Do not translate names and titles. Do not translate technical terms that you dont understand in context. Use words instead of numbers like "четвёртое июля" and not "4 июля". Voice will be generated for this text so please capitalize where stress should be in words.';
 
 let baseContext = null;
 
@@ -295,7 +295,7 @@ async function initContext(fullText) {
   return data.choices[0].message.content.trim();
 }
 
-async function translateWithLLM(text, translatedFullText) {
+async function translateWithLLM(text, fullText, translatedFullText) {
   try {
     const response = await fetch('http://localhost:1234/v1/chat/completions', {
       method: 'POST',
@@ -307,6 +307,10 @@ async function translateWithLLM(text, translatedFullText) {
         // context: baseContext,
 
         messages: [
+          {
+            role: 'system',
+            content: 'Here are full text so you understand context of translation: ' + fullText
+          },
           {
             role: 'system',
             content: 'Here are full translated text so you understand context of translation: ' + translatedFullText
@@ -379,7 +383,7 @@ async function step5_translate() {
     console.log(`O:  ${p.text}`);
 
     // 🔑 always reuse ORIGINAL context
-    p.translated = await translateWithLLM(p.text, translatedFullText);
+    p.translated = await translateWithLLM(p.text, fullText, translatedFullText);
 
     console.log(`T:  ${p.translated}`);
   }
@@ -408,7 +412,7 @@ async function step6_generateAudio() {
     const duration = Math.ceil(p.end - p.start);
     const textEscaped = p.translated.replace(/"/g, '\\"');
     const cmd = `generate_audio --model-dir models/base-1.7b --text "${textEscaped}" --ref-audio "${p.file}" --language russian --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
-    console.log(`  Generating (${duration}s): ${p.translated.substring(0, 40)}`);
+    console.log(`  Generating (${duration}s): ${p.translated}`);
     run(cmd);
   }
 }
