@@ -498,7 +498,7 @@ function getDuration(file) {
   run(cmd);
 } */
 
-  async function step7_joinAudio() {
+async function step7_joinAudio() {
   if (!loadParts()) throw new Error('No parts.json');
 
   const validParts = [];
@@ -522,6 +522,17 @@ function getDuration(file) {
   const filterChains = [];
   const partLabels = [];
 
+  const allWords = [];
+  
+  const data = JSON.parse(fs.readFileSync(transcriptFile, 'utf8'));
+
+  if (!data.segments) throw new Error('transcript.json missing segments');
+  for (const seg of data.segments) {
+    for (const w of seg.words || []) {
+      allWords.push(w);
+    }
+  }
+
   let inputIdx = 0;
 
   for (const p of validParts) {
@@ -537,7 +548,7 @@ function getDuration(file) {
     const OFFSET = 0.2;
     const nextWord = allWords.find(w => w.start > p.end);
     const nextTime = nextWord ? nextWord.start - OFFSET : p.end + OFFSET;
-    const originalDuration = p.end - nextTime; 
+    const originalDuration = nextTime - p.start; 
     const speed = translatedDuration / originalDuration;
     const startMs = Math.round(p.start * 1000);
 
