@@ -6,7 +6,8 @@ const INPUT_VIDEO = process.argv[2];
 const skipArg = process.argv[3];
 let SKIP_TO_STEP = 0;
 
-const TARGET_LANGUAGE = 'english';
+const TRANSLATE_LANGUAGE = 'english';
+const VOICEOVER_LANGUAGE = 'english';
 
 if (skipArg) {
   const parsed = parseInt(skipArg);
@@ -202,7 +203,7 @@ async function initContext(fullText) {
         },
         {
           role: 'system',
-          content: 'Translate text to ' + TARGET_LANGUAGE + '. Output only the translation, nothing else.'
+          content: 'Translate text to ' + TRANSLATE_LANGUAGE + '. Output only the translation, nothing else.'
         },
         {
           role: 'user',
@@ -241,7 +242,7 @@ async function translateWithLLM(text, fullText, translatedFullText) {
           },
           {
             role: 'system',
-            content: 'Translate this part to ' + TARGET_LANGUAGE + '. Output only translation AND ONLY FOR THIS PART and nothing else. IMPORTANT: translate only this part! Translation should not be longer than original text.'
+            content: 'Translate this part to ' + TRANSLATE_LANGUAGE + '. Output only translation AND ONLY FOR THIS PART and nothing else. IMPORTANT: translate only this part! Translation should not be longer than original text. If you add something from full text except this part, I will punish you hard!'
           },
           {
             role: 'user',
@@ -296,7 +297,7 @@ async function step6_generateAudio() {
     const out = path.join(TRANS_DIR, path.basename(p.file));
     const duration = Math.ceil(p.end - p.start);
     const textEscaped = p.translated.replace(/"/g, '\\"');
-    const cmd = `generate_audio --model-dir models/base-1.7b --text "${textEscaped}" --ref-audio "${p.file}" --language ${TARGET_LANGUAGE} --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
+    const cmd = `generate_audio --model-dir models/base-1.7b --text "${textEscaped}" --ref-audio "${p.file}" --language ${VOICEOVER_LANGUAGE} --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
     console.log(`  Generating (${duration}s): ${p.translated}`);
     run(cmd);
   }
