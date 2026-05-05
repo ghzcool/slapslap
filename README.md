@@ -31,6 +31,16 @@ node index.js video-file-name.mp4
 
 wait
 
-grab translated-video-file-name.mp4
+grab translated_video-file-name.mp4
 
 enjoy
+
+## Issues
+
+### Major
+- need to separate voice from other sounds and combine with them in the end
+- speed up and slow down - need to fix
+
+## Minor
+- tts quality is not the best
+- need to test more local llm's to find best for this case
