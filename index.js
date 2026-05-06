@@ -3,16 +3,17 @@ const path = require('path');
 const { execSync, spawn } = require('child_process');
 
 const INPUT_VIDEO = process.argv[2];
-const skipArg = process.argv[3];
+const LANGUAGE = process.argv[3];
+const skipArg = process.argv[4];
 let SKIP_TO_STEP = 0;
 
-const TRANSLATE_LANGUAGE = 'english';
-const VOICEOVER_LANGUAGE = 'english';
+const TRANSLATE_LANGUAGE = LANGUAGE ?? 'russian';
+const VOICEOVER_LANGUAGE = LANGUAGE ?? 'russian';
 
 if (skipArg) {
   const parsed = parseInt(skipArg);
   if (isNaN(parsed) || parsed < 1 || parsed > 9) {
-    console.error('Usage: node index.js <video-file> [skip-to-step]');
+    console.error('Usage: node index.js <video-file> [language] [skip-to-step]');
     console.error('skip-to-step: 1-9, first step to run (default: 1, runs all)');
     process.exit(1);
   }
@@ -20,7 +21,7 @@ if (skipArg) {
 }
 
 if (!INPUT_VIDEO) {
-  console.error('Usage: node index.js <video-file> [skip-to-step]');
+  console.error('Usage: node index.js <video-file> [language] [skip-to-step]');
   process.exit(1);
 }
 
@@ -33,6 +34,7 @@ const PARTS_JSON = path.join(WORK_DIR, 'parts.json');
 if (!fs.existsSync(WORK_DIR)) fs.mkdirSync(WORK_DIR, { recursive: true });
 
 const voiceFile = path.join(AUDIO_DIR, 'voice.wav');
+const tempVoiceFile = path.join(AUDIO_DIR, '_voice.wav');
 const noVoiceFile = path.join(AUDIO_DIR, 'no_voice.wav');
 const translatedVoiceFile = path.join(AUDIO_DIR, 'translated_voice.wav');
 const combinedAudio = path.join(AUDIO_DIR, 'combined.wav');
@@ -71,7 +73,8 @@ function saveParts() {
 async function step1_extractAudio() {
   if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR, { recursive: true });
   console.log('\n=== Step 1: Extract audio from video ===');
-  run(`ffmpeg -i "${INPUT_VIDEO}" -vn -acodec pcm_s16le -ar 44100 -ac 2 "${voiceFile}" -y`);
+  run(`ffmpeg -i "${INPUT_VIDEO}" -vn -acodec pcm_s16le -ar 44100 -ac 2 "${tempVoiceFile}" -y`);
+  run(`ffmpeg -i "${tempVoiceFile}" -af "highpass=f=80, lowpass=f=8000, afftdn, loudnorm" -ac 1 -ar 16000 "${voiceFile}" -y`);
 }
 
 function mergeSegmentsToSentences(segments) {
@@ -152,8 +155,8 @@ function mergeSegmentsToSentences(segments) {
 }
 
 async function step2_speechToText() {
-  console.log('\n=== Step 2: Speech to text ===');
-  run(`set PYTHONWARNINGS=ignore && whisper "${voiceFile}" --model base --output_format json --word_timestamps True`); // --language en
+  console.log('\n=== Step 2: Speech to text ==='); // small medium large large-v3 large-v3-turbo
+  run(`set PYTHONWARNINGS=ignore && whisper "${voiceFile}" --model large-v3-turbo --output_format json --word_timestamps True`); // --language en
   if (fs.existsSync(textFile)) fs.renameSync(textFile, transcriptFile);
 }
 
@@ -242,11 +245,11 @@ async function translateWithLLM(text, fullText, translatedFullText) {
           },
           {
             role: 'system',
-            content: 'Translate this part to ' + TRANSLATE_LANGUAGE + '. Output only translation AND ONLY FOR THIS PART and nothing else. IMPORTANT: translate only this part! Translation should not be longer than original text. If you add something from full text except this part, I will punish you hard!'
+            content: 'Translate this part of text to ' + TRANSLATE_LANGUAGE + '. Output only translation AND ONLY FOR THIS PART and nothing else. IMPORTANT: translate only this part! Translation should not be longer than original text. If you add something from full text except this part, I will put you in jail!'
           },
           {
             role: 'user',
-            content: text
+            content: 'Translate ONLY this text: ' + text
           }
         ],
 
@@ -261,6 +264,45 @@ async function translateWithLLM(text, fullText, translatedFullText) {
     return data.choices[0].message.content.trim();
   } catch (error) {
     console.error('Translation failed:', error.message);
+    return text;
+  }
+}
+
+async function doubleCheckWithLLM(text, translation) {
+  try {
+    const response = await fetch('http://localhost:1234/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama-3',
+
+        messages: [
+          {
+            role: 'system',
+            content: `I have a script that cut translated text and make pairs of original and translated text parts.
+            This script sometimes fails and cut in wrong place so extra part of text is in translation.
+            Your task is to double-check the translation and ensure it does not contain any extra text.
+            Please return only the translation without extra text and without any explanations.
+            Don't change or rephrase it, just remove extra text if it is there.`
+          },
+          {
+            role: 'user',
+            content: `Original text: "${text}".
+            Translated to ${TRANSLATE_LANGUAGE} text: "${translation}".`
+          }
+        ],
+
+        temperature: 0,
+        max_tokens: 500,
+        stop: ["\n", "<think>"]
+      })
+    });
+
+    const data = await response.json();
+
+    return data.choices[0].message.content.trim();
+  } catch (error) {
+    console.error('Double check failed:', error.message);
     return text;
   }
 }
@@ -280,10 +322,13 @@ async function step5_translate() {
 
     console.log(`O:  ${p.text}`);
 
-    // 🔑 always reuse ORIGINAL context
     p.translated = await translateWithLLM(p.text, fullText, translatedFullText);
-
+    
     console.log(`T:  ${p.translated}`);
+
+    p.translated = await doubleCheckWithLLM(p.text, p.translated);
+
+    console.log(`D:  ${p.translated}`);
   }
 
   saveParts();
@@ -429,7 +474,7 @@ function runFFmpeg(args) {
 }
 
 async function step9_makeVideo() {
-  const outputVideo = path.join(__dirname, `translated_${path.basename(INPUT_VIDEO)}`);
+  const outputVideo = path.join(__dirname, TRANSLATE_LANGUAGE + '_' + path.basename(INPUT_VIDEO));
   console.log('\n=== Step 9: Create video ===');
   run(`ffmpeg -i "${INPUT_VIDEO}" -i "${translatedVoiceFile}" -map 0:v -map 1:a -c:v copy -shortest "${outputVideo}" -y`);
   console.log(`Done! ${outputVideo}`);

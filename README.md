@@ -26,12 +26,12 @@ Make new video file from original video with replaced audio to translated one.
 
 run
 ```
-node index.js video-file-name.mp4
+node index.js video-file-name.mp4 russian
 ```
 
 wait
 
-grab translated_video-file-name.mp4
+grab russian_video-file-name.mp4
 
 enjoy
 
@@ -39,8 +39,12 @@ enjoy
 
 ### Major
 - need to separate voice from other sounds and combine with them in the end
-- speed up and slow down - need to fix
 
 ## Minor
 - tts quality is not the best
-- need to test more local llm's to find best for this case
+
+## Changes
+
+- More or less fixed voice speed with changes in prompts, addidg double check of extra text in translation and improved voice spped logic. In some cases translations for short phrases have very different length with original and it's not clear how to fix that.
+- Improved speech to text by changing model to better one.
+- Tested different LLM's: Good enough translation results with qwen3.6-35b-a3b. qwen3.5-9b is faster and also not bad.
