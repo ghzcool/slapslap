@@ -1,7 +1,7 @@
-models/base-1.7b
-work
-video.mp4
-translated_video.mp4
+/models/base-1.7b
+/work
+/venv-ml
+/*.mp4
 
 # Logs
 logs

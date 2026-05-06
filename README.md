@@ -7,8 +7,18 @@ Translates video by replacing voices by similarly sounding translated voices.
 
 Nodejs, ffmpeg, fs, CMD, local AI's
 
-pip install -U openai-whisper
+py -3.11 -m venv venv-ml
+venv-ml\Scripts\activate
 
+python -m pip install --upgrade pip
+
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+pip install demucs
+
+pip install soundfile
+
+pip install -U openai-whisper
 
 ## What does it do
 

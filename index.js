@@ -74,7 +74,31 @@ async function step1_extractAudio() {
   if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR, { recursive: true });
   console.log('\n=== Step 1: Extract audio from video ===');
   run(`ffmpeg -i "${INPUT_VIDEO}" -vn -acodec pcm_s16le -ar 44100 -ac 2 "${tempVoiceFile}" -y`);
-  run(`ffmpeg -i "${tempVoiceFile}" -af "highpass=f=80, lowpass=f=8000, afftdn, loudnorm" -ac 1 -ar 16000 "${voiceFile}" -y`);
+
+  await step1b_separateAudio();
+}
+
+async function step1b_separateAudio() {
+  console.log('\n=== Step 1b: Separate voice and background (Demucs) ===');
+
+  const input = tempVoiceFile; // твой исходный extracted audio
+  const outDir = path.join(AUDIO_DIR, 'demucs');
+
+  run(`venv-ml\\Scripts\\python -m demucs --device cuda --two-stems=vocals --float32 -o "${outDir}" "${input}"`);
+  // run(`demucs --device cuda --two-stems=vocals --float32 -o "${outDir}" "${input}"`);
+
+  const base = path.basename(input, path.extname(input));
+  const demucsFolder = path.join(outDir, 'htdemucs', base);
+
+  const vocals = path.join(demucsFolder, 'vocals.wav');
+  const noVocals = path.join(demucsFolder, 'no_vocals.wav');
+
+  if (!fs.existsSync(vocals)) throw new Error('Demucs vocals not found');
+
+  fs.copyFileSync(vocals, voiceFile);
+  fs.copyFileSync(noVocals, noVoiceFile);
+
+  console.log('Voice and background separated');
 }
 
 function mergeSegmentsToSentences(segments) {
@@ -458,6 +482,28 @@ console.log({
   await runFFmpeg(args);
 }
 
+async function step8_mixVoiceWithBackground() {
+  console.log('\n=== Step 8: Mix translated voice with background ===');
+
+  const output = combinedAudio;
+
+  const args = [
+    '-i', noVoiceFile,          // фон
+    '-i', translatedVoiceFile,  // твой голос
+    '-filter_complex',
+    `
+    [0:a]volume=1.0[bg];
+    [1:a]volume=1.2[voice];
+    [bg][voice]amix=inputs=2:duration=longest:normalize=0[out]
+    `,
+    '-map', '[out]',
+    '-y',
+    output
+  ];
+
+  await runFFmpeg(args);
+}
+
 function runFFmpeg(args) {
   return new Promise((resolve, reject) => {
     const ff = spawn('ffmpeg', args, {
@@ -483,14 +529,13 @@ async function step9_makeVideo() {
 async function main() {
   try {
     if (SKIP_TO_STEP <= 1) await step1_extractAudio();
-    // TODO: add step with demucs to separate voice and no voice audio
     if (SKIP_TO_STEP <= 2) await step2_speechToText();
     if (SKIP_TO_STEP <= 3) await step3_parseTranscriptAndCut();
     if (SKIP_TO_STEP <= 5) await step5_translate();
     if (SKIP_TO_STEP <= 6) await step6_generateAudio();
     if (SKIP_TO_STEP <= 7) await step7_joinAudio();
-    // TODO: add step to combine no voice audio with translations
-    await step9_makeVideo();
+    if (SKIP_TO_STEP <= 8) await step8_mixVoiceWithBackground();
+    if (SKIP_TO_STEP <= 9) await step9_makeVideo();
   } catch (e) {
     console.error('Error:', e.message);
     process.exit(1);
