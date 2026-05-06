@@ -523,7 +523,7 @@ function runFFmpeg(args) {
 async function step9_makeVideo() {
   const outputVideo = path.join(__dirname, TRANSLATE_LANGUAGE + '_' + path.basename(INPUT_VIDEO));
   console.log('\n=== Step 9: Create video ===');
-  run(`ffmpeg -i "${INPUT_VIDEO}" -i "${translatedVoiceFile}" -map 0:v -map 1:a -c:v copy -shortest "${outputVideo}" -y`);
+  run(`ffmpeg -i "${INPUT_VIDEO}" -i "${combinedAudio}" -map 0:v -map 1:a -c:v copy -shortest "${outputVideo}" -y`);
   console.log(`Done! ${outputVideo}`);
 }
 
