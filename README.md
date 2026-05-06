@@ -7,19 +7,16 @@ Translates video by replacing voices by similarly sounding translated voices.
 
 Nodejs, ffmpeg, fs, CMD, local AI's
 
-pip install -U openai-whisper
-
 py -3.11 -m venv venv-ml
 venv-ml\Scripts\activate
 
 python -m pip install --upgrade pip
 
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
-
 pip install demucs
-
 pip install soundfile
 
+pip install -U openai-whisper
 
 ## What does it do
 
@@ -49,7 +46,7 @@ enjoy
 ## Issues
 
 ### Minor
-- tts quality is not the best
+- tts quality is not the best. Need to try OmniVoice
 
 ## Changes
 
@@ -57,3 +54,4 @@ enjoy
 - Improved speech to text by changing model to better one.
 - Tested different LLM's: Good enough translation results with qwen3.6-35b-a3b. qwen3.5-9b is faster and also not bad.
 - Voice separated from audio and combined back in the end
+- Added original voice with 20% volume for lipsink.

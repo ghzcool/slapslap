@@ -180,7 +180,7 @@ function mergeSegmentsToSentences(segments) {
 
 async function step2_speechToText() {
   console.log('\n=== Step 2: Speech to text ==='); // small medium large large-v3 large-v3-turbo
-  run(`set PYTHONWARNINGS=ignore && whisper "${voiceFile}" --model large-v3-turbo --output_format json --word_timestamps True`); // --language en
+  run(`set PYTHONWARNINGS=ignore && venv-ml\\Scripts\\python -m whisper "${voiceFile}" --model large-v3-turbo --output_format json --word_timestamps True`); // --language en
   if (fs.existsSync(textFile)) fs.renameSync(textFile, transcriptFile);
 }
 
@@ -222,7 +222,7 @@ async function initContext(fullText) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'llama-3',
+      model: 'qwen/qwen3.5-9b',
       messages: [
         {
           role: 'system',
@@ -252,8 +252,7 @@ async function translateWithLLM(text, fullText, translatedFullText) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'llama-3',
-
+        model: 'qwen/qwen3.6-35b-a3b',
         messages: [
           {
             role: 'system',
@@ -298,8 +297,7 @@ async function doubleCheckWithLLM(text, translation) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'llama-3',
-
+        model: 'qwen/qwen3.6-35b-a3b',
         messages: [
           {
             role: 'system',
@@ -367,7 +365,7 @@ async function step6_generateAudio() {
     const out = path.join(TRANS_DIR, path.basename(p.file));
     const duration = Math.ceil(p.end - p.start);
     const textEscaped = p.translated.replace(/"/g, '\\"');
-    const cmd = `generate_audio --model-dir models/base-1.7b --text "${textEscaped}" --ref-audio "${p.file}" --language ${VOICEOVER_LANGUAGE} --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
+    const cmd = `generate_audio --model-dir models/base-1.7b --text="${textEscaped}" --ref-audio "${p.file}" --language ${VOICEOVER_LANGUAGE} --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
     console.log(`  Generating (${duration}s): ${p.translated}`);
     run(cmd);
   }
@@ -520,10 +518,39 @@ function runFFmpeg(args) {
   });
 }
 
-async function step9_makeVideo() {
+/* async function step9_makeVideo() {
   const outputVideo = path.join(__dirname, TRANSLATE_LANGUAGE + '_' + path.basename(INPUT_VIDEO));
   console.log('\n=== Step 9: Create video ===');
   run(`ffmpeg -i "${INPUT_VIDEO}" -i "${combinedAudio}" -map 0:v -map 1:a -c:v copy -shortest "${outputVideo}" -y`);
+  console.log(`Done! ${outputVideo}`);
+} */
+
+async function step9_makeVideo() {
+  const outputVideo = path.join(__dirname, TRANSLATE_LANGUAGE + '_' + path.basename(INPUT_VIDEO));
+  console.log('\n=== Step 9: Create video (with quiet original voice) ===');
+
+  const args = [
+    '-i', INPUT_VIDEO,          // видео
+    '-i', combinedAudio,        // перевод + фон
+    '-i', voiceFile,            // оригинальный голос (чистый)
+
+    '-filter_complex',
+    `
+    [1:a]volume=1.0[translated];
+    [2:a]volume=0.2[orig]; 
+    [translated][orig]amix=inputs=2:duration=longest:normalize=0[mix]
+    `,
+
+    '-map', '0:v',
+    '-map', '[mix]',
+    '-c:v', 'copy',
+    '-shortest',
+    '-y',
+    outputVideo
+  ];
+
+  await runFFmpeg(args);
+
   console.log(`Done! ${outputVideo}`);
 }
 
