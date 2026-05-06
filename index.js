@@ -307,7 +307,8 @@ async function doubleCheckWithLLM(text, translation) {
             This script sometimes fails and cut in wrong place so extra part of text is in translation.
             Your task is to double-check the translation and ensure it does not contain any extra text.
             Please return only the translation without extra text and without any explanations.
-            Don't change or rephrase it, just remove extra text if it is there.`
+            Don't change or rephrase translation, just remove extra text if it is there.
+            There are chance that script cuts totally wrong part of text, in this case please translate original text.`
           },
           {
             role: 'user',
