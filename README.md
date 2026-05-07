@@ -55,3 +55,4 @@ enjoy
 - Tested different LLM's: Good enough translation results with qwen3.6-35b-a3b. qwen3.5-9b is faster and also not bad.
 - Voice separated from audio and combined back in the end
 - Added original voice with 20% volume for lipsink.
+- Start LLM only when it's needed and stop it after.

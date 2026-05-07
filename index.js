@@ -7,9 +7,6 @@ const LANGUAGE = process.argv[3];
 const skipArg = process.argv[4];
 let SKIP_TO_STEP = 0;
 
-const TRANSLATE_LANGUAGE = LANGUAGE ?? 'russian';
-const VOICEOVER_LANGUAGE = LANGUAGE ?? 'russian';
-
 if (skipArg) {
   const parsed = parseInt(skipArg);
   if (isNaN(parsed) || parsed < 1 || parsed > 9) {
@@ -23,6 +20,63 @@ if (skipArg) {
 if (!INPUT_VIDEO) {
   console.error('Usage: node index.js <video-file> [language] [skip-to-step]');
   process.exit(1);
+}
+
+const TRANSLATE_LANGUAGE = LANGUAGE ?? 'russian';
+const VOICEOVER_LANGUAGE = LANGUAGE ?? 'russian';
+
+const LMSTUDIO_API_URL = 'http://localhost:1234';
+const LMSTUDIO_V1_API = `${LMSTUDIO_API_URL}/api/v1`;
+const LMSTUDIO_MODEL = process.env.LM_MODEL || 'qwen/qwen3.5-9b';
+const LMSTUDIO_MODEL_LARGE = process.env.LM_MODEL_LARGE || 'qwen/qwen3.6-35b-a3b';
+const LM_API_TOKEN = process.env.LM_API_TOKEN ?? 'none';
+
+function getLMStudioHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  if (LM_API_TOKEN) {
+    headers['Authorization'] = `Bearer ${LM_API_TOKEN}`;
+  }
+  return headers;
+}
+
+async function loadLMStudioModel(modelKey) {
+  console.log(`\n=== Loading model: ${modelKey} ===`);
+  const response = await fetch(`${LMSTUDIO_V1_API}/models/load`, {
+    method: 'POST',
+    headers: getLMStudioHeaders(),
+    body: JSON.stringify({
+      model: modelKey,
+      context_length: 16384,
+      flash_attention: true
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to load model: ${error}`);
+  }
+
+  const data = await response.json();
+  console.log(`Model loaded: ${data.instance_id}`);
+  return data.instance_id;
+}
+
+async function unloadLMStudioModel(instanceId) {
+  console.log(`\n=== Unloading model: ${instanceId} ===`);
+  const response = await fetch(`${LMSTUDIO_V1_API}/models/unload`, {
+    method: 'POST',
+    headers: getLMStudioHeaders(),
+    body: JSON.stringify({
+      instance_id: instanceId
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to unload model: ${error}`);
+  }
+
+  console.log('Model unloaded');
 }
 
 const WORK_DIR = path.join(__dirname, 'work');
@@ -215,14 +269,14 @@ async function step3_parseTranscriptAndCut() {
   saveParts();
 }
 
-const rules = 'This text is generated from speech recognition and may contain errors. Make corrections to this text and restore it as good as possible. Keep same style but write numbers as text. THIS IS IMPORTANT: Do not write numbers as numbers "с 2017 года" should be "с две тысячи семнадцатого года"! This translation will be used for dub voiceover so keep length very similar to original (not text length but audio length) adapt translation or rephrase if needed. Make it sound natural, like people say. IMPORTANT: Do not translate names and titles. Do not translate technical terms that you dont understand in context. Use words instead of numbers like "четвёртое июля" and not "4 июля". Voice will be generated for this text so please capitalize where stress should be in words.';
+const rules = 'This text is generated from speech recognition and may contain errors. Make corrections to this text and restore it as good as possible. Keep same style but write numbers as text. THIS IS IMPORTANT: Do not write numbers as numbers "с 2017 года" should be "с две тысячи семнадцатого года"! This translation will be used for dub voiceover so keep length very similar to original (not text length but audio length) adapt translation or rephrase if needed. Make it sound natural, like people say. IMPORTANT: Do not translate names and titles. Do not translate technical terms that you dont understand in context. Use words instead of numbers like "четвёртое июля" and not "4 июля". Voice will be generated for this text.';
 
 async function initContext(fullText) {
   const response = await fetch('http://localhost:1234/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'qwen/qwen3.5-9b',
+      model: LMSTUDIO_MODEL_LARGE,
       messages: [
         {
           role: 'system',
@@ -237,7 +291,8 @@ async function initContext(fullText) {
           content: fullText
         }
       ],
-      temperature: 0
+      temperature: 0,
+      chat_template_kwargs: { enable_thinking: false }
     })
   });
 
@@ -252,7 +307,7 @@ async function translateWithLLM(text, fullText, translatedFullText) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'qwen/qwen3.6-35b-a3b',
+        model: LMSTUDIO_MODEL_LARGE,
         messages: [
           {
             role: 'system',
@@ -278,7 +333,8 @@ async function translateWithLLM(text, fullText, translatedFullText) {
 
         temperature: 0,
         max_tokens: 500,
-        stop: ["\n", "<think>"]
+        stop: ["\n", "<think>"],
+        chat_template_kwargs: { enable_thinking: false }
       })
     });
 
@@ -297,7 +353,7 @@ async function doubleCheckWithLLM(text, translation) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'qwen/qwen3.6-35b-a3b',
+        model: LMSTUDIO_MODEL_LARGE,
         messages: [
           {
             role: 'system',
@@ -317,7 +373,8 @@ async function doubleCheckWithLLM(text, translation) {
 
         temperature: 0,
         max_tokens: 500,
-        stop: ["\n", "<think>"]
+        stop: ["\n", "<think>"],
+        chat_template_kwargs: { enable_thinking: false }
       })
     });
 
@@ -365,6 +422,7 @@ async function step6_generateAudio() {
     const out = path.join(TRANS_DIR, path.basename(p.file));
     const duration = Math.ceil(p.end - p.start);
     const textEscaped = p.translated.replace(/"/g, '\\"');
+    const refTextEscaped = p.text.replace(/"/g, '\\"'); //  --ref-text="${refTextEscaped}"
     const cmd = `generate_audio --model-dir models/base-1.7b --text="${textEscaped}" --ref-audio "${p.file}" --language ${VOICEOVER_LANGUAGE} --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
     console.log(`  Generating (${duration}s): ${p.translated}`);
     run(cmd);
@@ -445,7 +503,7 @@ console.log({
   originalDurationFile: getDuration(p.file)
 });
 
-    const safeSpeed = Math.max(1, speed);
+    const safeSpeed = Math.max(1, Math.min(speed, 100));
 
     atempoFilters.push(`atempo=${safeSpeed.toFixed(4)}`);
 
@@ -555,17 +613,37 @@ async function step9_makeVideo() {
 }
 
 async function main() {
+  let loadedModelId = null;
   try {
     if (SKIP_TO_STEP <= 1) await step1_extractAudio();
     if (SKIP_TO_STEP <= 2) await step2_speechToText();
     if (SKIP_TO_STEP <= 3) await step3_parseTranscriptAndCut();
-    if (SKIP_TO_STEP <= 5) await step5_translate();
+
+    if (SKIP_TO_STEP <= 5) {
+      loadedModelId = await loadLMStudioModel(LMSTUDIO_MODEL_LARGE);
+      try {
+        await step5_translate();
+      } finally {
+        if (loadedModelId) {
+          await unloadLMStudioModel(loadedModelId);
+          loadedModelId = null;
+        }
+      }
+    }
+
     if (SKIP_TO_STEP <= 6) await step6_generateAudio();
     if (SKIP_TO_STEP <= 7) await step7_joinAudio();
     if (SKIP_TO_STEP <= 8) await step8_mixVoiceWithBackground();
     if (SKIP_TO_STEP <= 9) await step9_makeVideo();
   } catch (e) {
     console.error('Error:', e.message);
+    if (loadedModelId) {
+      try {
+        await unloadLMStudioModel(loadedModelId);
+      } catch (unloadError) {
+        console.error('Failed to unload model:', unloadError.message);
+      }
+    }
     process.exit(1);
   }
 }
