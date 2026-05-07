@@ -271,12 +271,74 @@ async function step3_parseTranscriptAndCut() {
 
 const rules = 'This text is generated from speech recognition and may contain errors. Make corrections to this text and restore it as good as possible. Keep same style but write numbers as text. THIS IS IMPORTANT: Do not write numbers as numbers "с 2017 года" should be "с две тысячи семнадцатого года"! This translation will be used for dub voiceover so keep length very similar to original (not text length but audio length) adapt translation or rephrase if needed. Make it sound natural, like people say. IMPORTANT: Do not translate names and titles. Do not translate technical terms that you dont understand in context. Use words instead of numbers like "четвёртое июля" and not "4 июля". Voice will be generated for this text.';
 
-async function initContext(fullText) {
-  const response = await fetch('http://localhost:1234/v1/chat/completions', {
+async function fetchStream(body) {
+  const res = await fetch('http://localhost:1234/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Connection': 'close'
+    },
     body: JSON.stringify({
-      model: LMSTUDIO_MODEL_LARGE,
+      ...body,
+      stream: true
+    })
+  });
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+
+  const decoder = new TextDecoder('utf-8');
+
+  let result = '';
+  let buffer = '';
+
+  for await (const chunk of res.body) {
+    // 🔥 decode Uint8Array correctly
+    buffer += decoder.decode(chunk, { stream: true });
+
+    // split complete SSE lines
+    const lines = buffer.split('\n');
+
+    // keep incomplete line for next chunk
+    buffer = lines.pop();
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      if (!trimmed.startsWith('data:')) continue;
+
+      const data = trimmed.replace(/^data:\s*/, '');
+
+      if (data === '[DONE]') {
+        return result.trim();
+      }
+
+      try {
+        const json = JSON.parse(data);
+
+        // OpenAI-compatible streaming format
+        const token =
+          json.choices?.[0]?.delta?.content ??
+          json.choices?.[0]?.text ??
+          '';
+
+        if (token) {
+          process.stdout.write(token);
+          result += token;
+        }
+      } catch (e) {
+        // partial JSON can happen between chunks
+      }
+    }
+  }
+
+  return result.trim();
+}
+
+async function initContext(fullText) {
+  return await fetchStream({
+    model: LMSTUDIO_MODEL_LARGE,
       messages: [
         {
           role: 'system',
@@ -293,12 +355,7 @@ async function initContext(fullText) {
       ],
       temperature: 0,
       chat_template_kwargs: { enable_thinking: false }
-    })
   });
-
-  const data = await response.json();
-
-  return data.choices[0].message.content.trim();
 }
 
 async function translateWithLLM(text, fullText, translatedFullText) {
@@ -396,6 +453,8 @@ async function step5_translate() {
 
   console.log('Initializing context...');
   const translatedFullText = await initContext(fullText);
+
+  console.log(translatedFullText);
 
   for (const p of parts) {
     if (p.translated) continue;
