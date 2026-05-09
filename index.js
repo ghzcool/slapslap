@@ -28,7 +28,7 @@ const VOICEOVER_LANGUAGE = LANGUAGE ?? 'russian';
 const LMSTUDIO_API_URL = 'http://localhost:1234'; // 'http://10.100.1.77:1234'; //
 const LMSTUDIO_V1_API = `${LMSTUDIO_API_URL}/api/v1`;
 const LMSTUDIO_MODEL = process.env.LM_MODEL || 'qwen/qwen3.5-9b';
-const LMSTUDIO_MODEL_LARGE = process.env.LM_MODEL_LARGE || 'qwen/qwen3.5-9b'; // 'qwen/qwen3.6-35b-a3b';
+const LMSTUDIO_MODEL_LARGE = process.env.LM_MODEL_LARGE || 'qwen/qwen3.6-35b-a3b';
 const LM_API_TOKEN = process.env.LM_API_TOKEN ?? 'none';
 
 function getLMStudioHeaders() {
@@ -367,7 +367,7 @@ async function initContext(fullText) {
   });
 }
 
-async function translateWithLLM(text, fullText, translatedFullText) {
+async function translateWithLLM(text, fullText, translatedFullText, duration) {
   try {
     const response = await fetch('http://localhost:1234/v1/chat/completions', {
       method: 'POST',
@@ -386,6 +386,12 @@ async function translateWithLLM(text, fullText, translatedFullText) {
           {
             role: 'system',
             content: 'rules: ' + rules
+          },
+          {
+            role: 'system',
+            content: `Original voice duration is: ${duration} seconds.
+            Try to keep translation duration and amount of syllables similar by adapting translation if needed.
+            Do not make translation longer or with more syllables than original, if it's longer, adapt it or rephrase to fit duration.`
           },
           {
             role: 'system',
@@ -471,13 +477,13 @@ async function step5_translate() {
 
     console.log(`O:  ${p.text}`);
 
-    p.translated = await translateWithLLM(p.text, fullText, translatedFullText);
+    p.translated = await translateWithLLM(p.text, fullText, translatedFullText, (p.end - p.start).toFixed(2));
     
     console.log(`T:  ${p.translated}`);
 
-    p.translated = await doubleCheckWithLLM(p.text, p.translated);
+    // p.translated = await doubleCheckWithLLM(p.text, p.translated);
 
-    console.log(`D:  ${p.translated}`);
+    // console.log(`D:  ${p.translated}`);
   }
 
   saveParts();
