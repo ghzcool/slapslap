@@ -254,7 +254,7 @@ async function step3_parseTranscriptAndCut() {
     text: sent.text,
     translated: '',
     file: ''
-  }));
+  })).filter(p => p.end - p.start > 0.3); // фильтр коротких частей
 
   if (!fs.existsSync(PARTS_DIR)) fs.mkdirSync(PARTS_DIR, { recursive: true });
 
