@@ -547,42 +547,122 @@ async function step7_joinAudio() {
 
   for (const p of validParts) {
     const translatedDuration = getDuration(p.translatedFile);
-    if (!translatedDuration) {
-      console.warn(`  WARNING: Could not read duration for ${path.basename(p.translatedFile)}, skipping`);
-      continue;
-    }
 
-    args.push('-i', p.translatedFile);
+  if (!translatedDuration) {
+    console.warn(`  WARNING: Could not read duration for ${path.basename(p.translatedFile)}, skipping`);
+    continue;
+  }
 
-    // const originalDuration = getDuration(p.file);
-    const OFFSET = 0.2;
-    const nextWord = allWords.find(w => w.start > p.end);
-    const nextTime = nextWord ? nextWord.start - OFFSET : p.end + OFFSET;
-    const originalDuration = nextTime - p.start; 
-    const speed = translatedDuration / originalDuration;
-    const startMs = Math.round(p.start * 1000);
+  args.push('-i', p.translatedFile);
 
-    const atempoFilters = [];
+  // соседние слова
+  const nextWord = allWords.find(w => w.start > p.end);
+  const prevWord = allWords.findLast(w => w.end < p.start);
 
-console.log({
-  file: p.translatedFile,
-  translatedDuration: translatedDuration,
-  slot: p.end - p.start,
-  originalDuration,
-  originalDurationFile: getDuration(p.file)
-});
+  // оригинальное окно
+  const originalStart = p.start;
+  const originalEnd = p.end;
+  const originalDuration = originalEnd - originalStart;
 
-    const safeSpeed = Math.max(1, Math.min(speed, 100));
+  // доступные промежутки
+  const gapBefore = prevWord
+    ? Math.max(0, originalStart - prevWord.end)
+    : 0;
 
-    atempoFilters.push(`atempo=${safeSpeed.toFixed(4)}`);
+  const gapAfter = nextWord
+    ? Math.max(0, nextWord.start - originalEnd)
+    : 0;
 
-    const adelayFilter = `adelay=${startMs}|${startMs}`;
+  // можно использовать максимум половину промежутков
+  const maxExtendBefore = gapBefore * 0.5;
+  const maxExtendAfter = gapAfter * 0.5;
 
-    const filterChain =
-      `[${inputIdx}:a]${atempoFilters.join(',')},${adelayFilter}[part${inputIdx}]`;
+  // насколько перевод длиннее оригинала
+  const overflow = Math.max(0, translatedDuration - originalDuration);
 
-    filterChains.push(filterChain);
-    partLabels.push(`[part${inputIdx}]`);
+  // насколько нужно расширить окно
+  // распределяем расширение симметрично
+  const desiredExtendBefore = Math.min(
+    maxExtendBefore,
+    overflow * 0.5
+  );
+
+  const desiredExtendAfter = Math.min(
+    maxExtendAfter,
+    overflow * 0.5
+  );
+
+  // итоговое окно
+  const targetStart = originalStart - desiredExtendBefore;
+  const targetEnd = originalEnd + desiredExtendAfter;
+
+  const availableDuration = targetEnd - targetStart;
+
+  // коэффициент speed
+  // стараемся вообще не ускорять,
+  // пока помещаемся
+  let speed = translatedDuration / availableDuration;
+
+  // ограничения для естественности
+  const MIN_SPEED = 1; // не замедляем, чтобы не звучало странно
+  const MAX_SPEED = 2; // не ускоряем слишком сильно, чтобы не звучало странно
+
+  // если ускорение небольшое — лучше оставить 1x
+  if (speed <= 1.03) {
+    speed = 1;
+  }
+
+  // clamp
+  speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, speed));
+
+  // если даже после overlap не влезает,
+  // слегка ускоряем
+  const finalDuration = translatedDuration / speed;
+
+  // центрируем внутри доступного окна
+  const freeSpace = Math.max(0, availableDuration - finalDuration);
+
+  const startTime =
+    targetStart + freeSpace * 0.5;
+
+  const startMs = Math.round(startTime * 1000);
+
+  console.log({
+    file: path.basename(p.translatedFile),
+
+    translatedDuration,
+    originalDuration,
+
+    gapBefore,
+    gapAfter,
+
+    desiredExtendBefore,
+    desiredExtendAfter,
+
+    availableDuration,
+
+    speed,
+    startTime
+  });
+
+  const atempoFilters = [];
+
+  if (Math.abs(speed - 1) > 0.01) {
+    atempoFilters.push(`atempo=${speed.toFixed(4)}`);
+  }
+
+  const adelayFilter = `adelay=${startMs}|${startMs}`;
+
+  const filter =
+    atempoFilters.length > 0
+      ? `${atempoFilters.join(',')},${adelayFilter}`
+      : adelayFilter;
+
+  const filterChain =
+    `[${inputIdx}:a]${filter}[part${inputIdx}]`;
+
+  filterChains.push(filterChain);
+  partLabels.push(`[part${inputIdx}]`);
 
     inputIdx++;
   }
