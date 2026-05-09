@@ -268,8 +268,17 @@ async function step3_parseTranscriptAndCut() {
   }
   saveParts();
 }
-
-const rules = 'This text is generated from speech recognition and may contain errors. Make corrections to this text and restore it as good as possible. Keep same style but write numbers as text. THIS IS IMPORTANT: Do not write numbers as numbers "с 2017 года" should be "с две тысячи семнадцатого года"! This translation will be used for dub voiceover so keep length very similar to original (not text length but audio length) adapt translation or rephrase if needed. Make it sound natural, like people say. IMPORTANT: Do not translate names and titles. Do not translate technical terms that you dont understand in context. Use words instead of numbers like "четвёртое июля" and not "4 июля". Voice will be generated for this text.';
+// Make corrections to this text and restore it as good as possible.
+const rules = `This text is generated from speech recognition and may contain errors.
+Keep same style for translation as in original so not only words are translated but also sence and emotion and style of speech are preserved.
+Write numbers as text.
+THIS IS IMPORTANT: Do not write numbers as numbers "с 2017 года" should be "с две тысячи семнадцатого года"!
+This translation will be used for dub voiceover so keep length very similar to original (not text length but audio length) adapt translation or rephrase if needed.
+IMPORTANT: Do not translate names and titles.
+Do not translate technical terms that you dont understand in context.
+Use words instead of numbers like "четвёртое июля" and not "4 июля".
+Voice will be generated for this text.
+Translation should not be longer than original text or voicover will be out of sync.`;
 
 async function fetchStream(body) {
   const res = await fetch('http://localhost:1234/v1/chat/completions', {
@@ -389,7 +398,7 @@ async function translateWithLLM(text, fullText, translatedFullText) {
         ],
 
         temperature: 0,
-        max_tokens: 500,
+        max_tokens: Math.ceil(text.length / 2),
         stop: ["\n", "<think>"],
         chat_template_kwargs: { enable_thinking: false }
       })
@@ -419,7 +428,8 @@ async function doubleCheckWithLLM(text, translation) {
             Your task is to double-check the translation and ensure it does not contain any extra text.
             Please return only the translation without extra text and without any explanations.
             Don't change or rephrase translation, just remove extra text if it is there.
-            There are chance that script cuts totally wrong part of text, in this case please translate original text.`
+            There are chance that script cuts totally wrong part of text, in this case please translate original text.
+            But PLEASE, do not change normally translated text! If it's not totally wrong part and don't have extra text, just return it as is.`
           },
           {
             role: 'user',
@@ -429,7 +439,7 @@ async function doubleCheckWithLLM(text, translation) {
         ],
 
         temperature: 0,
-        max_tokens: 500,
+        max_tokens: Math.ceil(text.length / 2),
         stop: ["\n", "<think>"],
         chat_template_kwargs: { enable_thinking: false }
       })
