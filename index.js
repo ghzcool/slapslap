@@ -25,10 +25,10 @@ if (!INPUT_VIDEO) {
 const TRANSLATE_LANGUAGE = LANGUAGE ?? 'russian';
 const VOICEOVER_LANGUAGE = LANGUAGE ?? 'russian';
 
-const LMSTUDIO_API_URL = 'http://localhost:1234';
+const LMSTUDIO_API_URL = 'http://localhost:1234'; // 'http://10.100.1.77:1234'; //
 const LMSTUDIO_V1_API = `${LMSTUDIO_API_URL}/api/v1`;
 const LMSTUDIO_MODEL = process.env.LM_MODEL || 'qwen/qwen3.5-9b';
-const LMSTUDIO_MODEL_LARGE = process.env.LM_MODEL_LARGE || 'qwen/qwen3.6-35b-a3b';
+const LMSTUDIO_MODEL_LARGE = process.env.LM_MODEL_LARGE || 'qwen/qwen3.5-9b'; // 'qwen/qwen3.6-35b-a3b';
 const LM_API_TOKEN = process.env.LM_API_TOKEN ?? 'none';
 
 function getLMStudioHeaders() {
@@ -173,7 +173,7 @@ function mergeSegmentsToSentences(segments) {
   let currentWords = [];
   let currentStart = null;
 
-  const PAUSE_THRESHOLD = 3;
+  const PAUSE_THRESHOLD = 2;
 
   for (let i = 0; i < allWords.length; i++) {
     const w = allWords[i];
@@ -191,7 +191,7 @@ function mergeSegmentsToSentences(segments) {
     const isEndByPause =
       nextWord && (nextWord.start - w.end > PAUSE_THRESHOLD);
 
-      const isTooLong = (w.end - currentStart > 20); // hard limit to avoid very long sentences
+      const isTooLong = (w.end - currentStart > 15); // hard limit to avoid very long sentences
 
     const shouldSplit =
       (isEndByPunctuation || isEndByPause || isTooLong) && nextWord;
@@ -234,7 +234,7 @@ function mergeSegmentsToSentences(segments) {
 
 async function step2_speechToText() {
   console.log('\n=== Step 2: Speech to text ==='); // small medium large large-v3 large-v3-turbo
-  run(`set PYTHONWARNINGS=ignore && venv-ml\\Scripts\\python -m whisper "${voiceFile}" --model large-v3-turbo --output_format json --word_timestamps True`); // --language en
+  run(`set PYTHONWARNINGS=ignore && venv-ml\\Scripts\\python -m whisper "${voiceFile}" --model large-v3 --output_format json --word_timestamps True`); // --language en
   if (fs.existsSync(textFile)) fs.renameSync(textFile, transcriptFile);
 }
 
@@ -586,8 +586,12 @@ console.log({
 
   const filterComplex = filterChains.join(';');
 
+  const scriptFile = path.join(WORK_DIR, 'filter_complex.txt');
+
+  fs.writeFileSync(scriptFile, filterComplex);
+
   args.push(
-    '-filter_complex', filterComplex,
+    '-filter_complex_script', scriptFile,
     '-map', '[out]',
     '-y',
     translatedVoiceFile
