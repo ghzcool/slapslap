@@ -14,10 +14,21 @@ TTS_RS_README.md  # TTS setup reference
 ## Run
 
 ```
-node index.js <video-file> <language> [skip-to-step]
+npx slapslap <video-file> [language] [-d] [-s <step>]
 ```
 
-- `skip-to-step` (1-9) jumps to a specific step for re-running.
+- `language` — target language (default: `russian`)
+- `-d` — dub mode: skip adding the muted original voice overlay in step 9
+- `-s <step>` — skip to step (1-9) for re-running
+- Flags can appear anywhere in the argument list
+
+Examples:
+```
+npx slapslap sample.mp4 russian -d -s 5
+npx slapslap -s 5 sample.mp4 japanese -d
+npx slapslap sample.mp4              # runs all steps, default language = russian
+```
+
 - `venv-ml` must be activated with CUDA support. Demucs and whisper are installed here.
 - LM Studio must be running on `http://localhost:1234` before step 5.
 
