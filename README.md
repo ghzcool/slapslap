@@ -32,16 +32,21 @@ Make new video file from original video with replaced audio to translated one.
 
 ## Usage
 
-run
 ```
-node index.js video-file-name.mp4 russian
+npx slapslap <video-file> [language] [-d] [-s <step>]
 ```
 
-wait
+- `language` — target language (default: `russian`)
+- `-d` — dub mode: skip adding the muted original voice overlay in step 9
+- `-s <step>` — skip to step (1-9) for re-running
+- Flags can appear anywhere in the argument list
 
-grab russian_video-file-name.mp4
-
-enjoy
+Examples:
+```
+npx slapslap sample.mp4 russian -d -s 5
+npx slapslap -s 5 sample.mp4 japanese -d
+npx slapslap sample.mp4              # runs all steps, default language = russian
+```
 
 ## Issues
 
