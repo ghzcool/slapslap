@@ -142,7 +142,7 @@ const tempVoiceFile = path.join(AUDIO_DIR, '_voice.wav');
 const noVoiceFile = path.join(AUDIO_DIR, 'no_voice.wav');
 const translatedVoiceFile = path.join(AUDIO_DIR, 'translated_voice.wav');
 const combinedAudio = path.join(AUDIO_DIR, 'combined.wav');
-const textFile = path.join(__dirname, 'voice.json');
+const textFile = path.join(WORK_DIR, 'voice.json');
 const transcriptFile = path.join(WORK_DIR, 'transcript.json');
 
 let parts = [];
@@ -284,7 +284,7 @@ function mergeSegmentsToSentences(segments) {
 
 async function step2_speechToText() {
   console.log('\n=== Step 2: Speech to text ==='); // small medium large large-v3 large-v3-turbo
-  run(`set PYTHONWARNINGS=ignore && venv-ml\\Scripts\\python -m whisper "${voiceFile}" --model large-v3 --output_format json --word_timestamps True`); // --language en
+  run(`set PYTHONWARNINGS=ignore && venv-ml\\Scripts\\python -m whisper "${voiceFile}" --model large-v3 --output_format json --output_dir "${WORK_DIR}" --word_timestamps True`); // --language en
   if (fs.existsSync(textFile)) fs.renameSync(textFile, transcriptFile);
 }
 
@@ -518,7 +518,14 @@ async function step5_translate() {
   const fullText = parts.map(p => p.text).join('\n');
 
   console.log('Initializing context...');
-  const translatedFullText = await initContext(fullText);
+  let translatedFullText;
+  try {
+    translatedFullText = await initContext(fullText);
+  } catch (e) {
+    console.error('Failed to initialize context (LLM may be unavailable):', e.message);
+    console.error('Continuing without context — individual translations may be less accurate.');
+    translatedFullText = '';
+  }
 
   console.log(translatedFullText);
 
@@ -570,7 +577,7 @@ async function step7_joinAudio() {
   const validParts = [];
 
   for (const p of parts) {
-    const translatedFile = '.' + path.join(TRANS_DIR, path.basename(p.file)).split(__dirname)[1];
+    const translatedFile = path.resolve(TRANS_DIR, path.basename(p.file));
 
     if (!fs.existsSync(translatedFile)) {
       console.warn(`  WARNING: Missing translated file for ${path.basename(p.file)}`);
@@ -840,6 +847,8 @@ async function main() {
     if (SKIP_TO_STEP_FINAL <= 1) await step1_extractAudio();
     if (SKIP_TO_STEP_FINAL <= 2) await step2_speechToText();
     if (SKIP_TO_STEP_FINAL <= 3) await step3_parseTranscriptAndCut();
+
+    // Step 4 was removed from the pipeline
 
     if (SKIP_TO_STEP_FINAL <= 5) {
       loadedModelId = await loadLMStudioModel(LMSTUDIO_MODEL_LARGE);
