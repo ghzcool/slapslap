@@ -2,6 +2,7 @@
 /work
 /venv-ml
 /*.mp4
+!/sample.mp4
 
 # Logs
 logs
