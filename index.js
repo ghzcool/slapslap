@@ -1,27 +1,77 @@
+#!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
 const { execSync, spawn } = require('child_process');
 
-const INPUT_VIDEO = process.argv[2];
-const LANGUAGE = process.argv[3];
-const skipArg = process.argv[4];
-let SKIP_TO_STEP = 0;
+function parseArgs() {
+  const args = process.argv.slice(2);
+  let videoFile = null;
+  let language = null;
+  let skipToStep = 0;
+  let dubOnly = false;
+  let i = 0;
 
-if (skipArg) {
-  const parsed = parseInt(skipArg);
-  if (isNaN(parsed) || parsed < 1 || parsed > 9) {
-    console.error('Usage: node index.js <video-file> [language] [skip-to-step]');
-    console.error('skip-to-step: 1-9, first step to run (default: 1, runs all)');
-    process.exit(1);
+  // First non-flag positional arg = video file
+  while (i < args.length && args[i].startsWith('-')) {
+    i++;
   }
-  SKIP_TO_STEP = parsed;
+  if (i < args.length) {
+    videoFile = args[i];
+    i++;
+  }
+
+  // Second non-flag positional arg = language
+  while (i < args.length && args[i].startsWith('-')) {
+    i++;
+  }
+  if (i < args.length) {
+    language = args[i];
+    i++;
+  }
+
+  // Now parse remaining flags in any order
+  while (i < args.length) {
+    const arg = args[i];
+    switch (arg) {
+      case '-d':
+        dubOnly = true;
+        break;
+      case '-s':
+        i++;
+        if (i >= args.length) {
+          console.error('Error: -s requires a step number (1-9)');
+          process.exit(1);
+        }
+        skipToStep = parseInt(args[i]);
+        if (isNaN(skipToStep) || skipToStep < 1 || skipToStep > 9) {
+          console.error('Error: skip-to-step must be 1-9');
+          process.exit(1);
+        }
+        break;
+      default:
+        console.error(`Error: unknown option '${arg}'`);
+        console.error('Usage: npx slapslap <video-file> [language] [-d] [-s <step>]');
+        console.error('  video-file   Input video file');
+        console.error('  language     Target language (default: russian)');
+        console.error('  -d           Dub mode: skip adding muted original voice (step 9)');
+        console.error('  -s <step>    Skip to step (1-9)');
+        process.exit(1);
+    }
+    i++;
+  }
+
+  return { videoFile, language, skipToStep, dubOnly };
 }
 
+const { videoFile: INPUT_VIDEO, language: LANGUAGE, skipToStep: SKIP_TO_STEP, dubOnly } = parseArgs();
+
 if (!INPUT_VIDEO) {
-  console.error('Usage: node index.js <video-file> [language] [skip-to-step]');
+  console.error('Usage: npx slapslap <video-file> [language] [-d] [-s <step>]');
   process.exit(1);
 }
 
+// step 0 = run all steps
+const SKIP_TO_STEP_FINAL = SKIP_TO_STEP || 0;
 const TRANSLATE_LANGUAGE = LANGUAGE ?? 'russian';
 const VOICEOVER_LANGUAGE = LANGUAGE ?? 'russian';
 
@@ -744,29 +794,42 @@ function runFFmpeg(args) {
 
 async function step9_makeVideo() {
   const outputVideo = path.join(__dirname, TRANSLATE_LANGUAGE + '_' + path.basename(INPUT_VIDEO));
-  console.log('\n=== Step 9: Create video (with quiet original voice) ===');
+  console.log('\n=== Step 9: Create video ===');
 
-  const args = [
-    '-i', INPUT_VIDEO,          // видео
-    '-i', combinedAudio,        // перевод + фон
-    '-i', voiceFile,            // оригинальный голос (чистый)
-
-    '-filter_complex',
-    `
-    [1:a]volume=1.0[translated];
-    [2:a]volume=0.2[orig]; 
-    [translated][orig]amix=inputs=2:duration=longest:normalize=0[mix]
-    `,
-
-    '-map', '0:v',
-    '-map', '[mix]',
-    '-c:v', 'copy',
-    '-shortest',
-    '-y',
-    outputVideo
-  ];
-
-  await runFFmpeg(args);
+  if (dubOnly) {
+    console.log('  Dub mode: using translated audio without original voice overlay');
+    const args = [
+      '-i', INPUT_VIDEO,
+      '-i', combinedAudio,
+      '-map', '0:v',
+      '-map', '1:a',
+      '-c:v', 'copy',
+      '-shortest',
+      '-y',
+      outputVideo
+    ];
+    await runFFmpeg(args);
+  } else {
+    console.log('  Adding quiet original voice overlay');
+    const args = [
+      '-i', INPUT_VIDEO,
+      '-i', combinedAudio,
+      '-i', voiceFile,
+      '-filter_complex',
+      `
+      [1:a]volume=1.0[translated];
+      [2:a]volume=0.2[orig]; 
+      [translated][orig]amix=inputs=2:duration=longest:normalize=0[mix]
+      `,
+      '-map', '0:v',
+      '-map', '[mix]',
+      '-c:v', 'copy',
+      '-shortest',
+      '-y',
+      outputVideo
+    ];
+    await runFFmpeg(args);
+  }
 
   console.log(`Done! ${outputVideo}`);
 }
@@ -774,11 +837,11 @@ async function step9_makeVideo() {
 async function main() {
   let loadedModelId = null;
   try {
-    if (SKIP_TO_STEP <= 1) await step1_extractAudio();
-    if (SKIP_TO_STEP <= 2) await step2_speechToText();
-    if (SKIP_TO_STEP <= 3) await step3_parseTranscriptAndCut();
+    if (SKIP_TO_STEP_FINAL <= 1) await step1_extractAudio();
+    if (SKIP_TO_STEP_FINAL <= 2) await step2_speechToText();
+    if (SKIP_TO_STEP_FINAL <= 3) await step3_parseTranscriptAndCut();
 
-    if (SKIP_TO_STEP <= 5) {
+    if (SKIP_TO_STEP_FINAL <= 5) {
       loadedModelId = await loadLMStudioModel(LMSTUDIO_MODEL_LARGE);
       try {
         await step5_translate();
@@ -790,10 +853,10 @@ async function main() {
       }
     }
 
-    if (SKIP_TO_STEP <= 6) await step6_generateAudio();
-    if (SKIP_TO_STEP <= 7) await step7_joinAudio();
-    if (SKIP_TO_STEP <= 8) await step8_mixVoiceWithBackground();
-    if (SKIP_TO_STEP <= 9) await step9_makeVideo();
+    if (SKIP_TO_STEP_FINAL <= 6) await step6_generateAudio();
+    if (SKIP_TO_STEP_FINAL <= 7) await step7_joinAudio();
+    if (SKIP_TO_STEP_FINAL <= 8) await step8_mixVoiceWithBackground();
+    if (SKIP_TO_STEP_FINAL <= 9) await step9_makeVideo();
   } catch (e) {
     console.error('Error:', e.message);
     if (loadedModelId) {

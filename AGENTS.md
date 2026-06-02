@@ -44,3 +44,4 @@ node index.js <video-file> <language> [skip-to-step]
 ## Testing / verification
 
 - No automated tests. Just review code.
+- Run script on sample.mp4 to verify that it works as expected.
