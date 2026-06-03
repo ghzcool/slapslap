@@ -9,6 +9,7 @@ function parseArgs() {
   let language = null;
   let skipToStep = 0;
   let dubOnly = false;
+  let model = null;
   let i = 0;
 
   // First non-flag positional arg = video file
@@ -48,22 +49,31 @@ function parseArgs() {
           process.exit(1);
         }
         break;
+      case '-m':
+        i++;
+        if (i >= args.length) {
+          console.error('Error: -m requires a model name');
+          process.exit(1);
+        }
+        model = args[i];
+        break;
       default:
         console.error(`Error: unknown option '${arg}'`);
-        console.error('Usage: npx slapslap <video-file> [language] [-d] [-s <step>]');
+        console.error('Usage: npx slapslap <video-file> [language] [-d] [-s <step>] [-m <model>]');
         console.error('  video-file   Input video file');
         console.error('  language     Target language (default: russian)');
         console.error('  -d           Dub mode: skip adding muted original voice (step 9)');
         console.error('  -s <step>    Skip to step (1-9)');
+        console.error('  -m <model>   LLM model to use (default: qwen/qwen3.6-35b-a3b)');
         process.exit(1);
     }
     i++;
   }
 
-  return { videoFile, language, skipToStep, dubOnly };
+  return { videoFile, language, skipToStep, dubOnly, model };
 }
 
-const { videoFile: INPUT_VIDEO, language: LANGUAGE, skipToStep: SKIP_TO_STEP, dubOnly } = parseArgs();
+const { videoFile: INPUT_VIDEO, language: LANGUAGE, skipToStep: SKIP_TO_STEP, dubOnly, model} = parseArgs();
 
 if (!INPUT_VIDEO) {
   console.error('Usage: npx slapslap <video-file> [language] [-d] [-s <step>]');
@@ -77,8 +87,7 @@ const VOICEOVER_LANGUAGE = LANGUAGE ?? 'russian';
 
 const LMSTUDIO_API_URL = 'http://localhost:1234'; // 'http://10.100.1.77:1234'; //
 const LMSTUDIO_V1_API = `${LMSTUDIO_API_URL}/api/v1`;
-const LMSTUDIO_MODEL = process.env.LM_MODEL || 'qwen/qwen3.5-9b';
-const LMSTUDIO_MODEL_LARGE = process.env.LM_MODEL_LARGE || 'qwen/qwen3.6-35b-a3b';
+const LMSTUDIO_MODEL = model || 'qwen/qwen3.6-35b-a3b';
 const LM_API_TOKEN = process.env.LM_API_TOKEN ?? 'none';
 
 function getLMStudioHeaders() {
@@ -397,7 +406,7 @@ async function fetchStream(body) {
 
 async function initContext(fullText) {
   return await fetchStream({
-    model: LMSTUDIO_MODEL_LARGE,
+    model: LMSTUDIO_MODEL,
       messages: [
         {
           role: 'system',
@@ -423,7 +432,7 @@ async function translateWithLLM(text, fullText, translatedFullText, duration) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: LMSTUDIO_MODEL_LARGE,
+        model: LMSTUDIO_MODEL,
         messages: [
           {
             role: 'system',
@@ -475,7 +484,7 @@ async function doubleCheckWithLLM(text, translation) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: LMSTUDIO_MODEL_LARGE,
+        model: LMSTUDIO_MODEL,
         messages: [
           {
             role: 'system',
@@ -851,7 +860,7 @@ async function main() {
     // Step 4 was removed from the pipeline
 
     if (SKIP_TO_STEP_FINAL <= 5) {
-      loadedModelId = await loadLMStudioModel(LMSTUDIO_MODEL_LARGE);
+      loadedModelId = await loadLMStudioModel(LMSTUDIO_MODEL);
       try {
         await step5_translate();
       } finally {
