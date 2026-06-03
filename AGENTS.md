@@ -1,5 +1,7 @@
 # SlapSlap — Agent Instructions
 
+IMPORTANT: ALWAYS START WITH MESSAGE "I FOLLOW RULES FROM `AGENTS.md`"
+
 ## Repo layout
 
 ```
@@ -51,6 +53,7 @@ npx slapslap sample.mp4              # runs all steps, default language = russia
   - If tester approves → task is done.
   - If tester finds issues → return the list of issues to coder for correction.
 - Never skip the tester review step.
+- Also use tester if task requires that.
 
 ## Testing / verification
 
