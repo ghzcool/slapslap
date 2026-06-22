@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Translates video by replacing voices with translated voices using AI's",
   "main": "index.js",
+  "bin": {
+    "slapslap": "index.js"
+  },
   "scripts": {
     "start": "node index.js"
   },
