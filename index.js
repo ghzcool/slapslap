@@ -25,10 +25,9 @@ if (!INPUT_VIDEO) {
 const TRANSLATE_LANGUAGE = LANGUAGE ?? 'russian';
 const VOICEOVER_LANGUAGE = LANGUAGE ?? 'russian';
 
-const LMSTUDIO_API_URL = 'http://localhost:1234'; // 'http://10.100.1.77:1234'; //
+const LMSTUDIO_API_URL = 'http://localhost:1234';
 const LMSTUDIO_V1_API = `${LMSTUDIO_API_URL}/api/v1`;
-const LMSTUDIO_MODEL = process.env.LM_MODEL || 'qwen/qwen3.5-9b';
-const LMSTUDIO_MODEL_LARGE = process.env.LM_MODEL_LARGE || 'qwen/qwen3.6-35b-a3b';
+const LMSTUDIO_MODEL = process.env.LM_MODEL || 'qwen/qwen3.6-35b-a3b';
 const LM_API_TOKEN = process.env.LM_API_TOKEN ?? 'none';
 
 function getLMStudioHeaders() {
@@ -347,7 +346,7 @@ async function fetchStream(body) {
 
 async function initContext(fullText) {
   return await fetchStream({
-    model: LMSTUDIO_MODEL_LARGE,
+    model: LMSTUDIO_MODEL,
       messages: [
         {
           role: 'system',
@@ -373,7 +372,7 @@ async function translateWithLLM(text, fullText, translatedFullText, duration) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: LMSTUDIO_MODEL_LARGE,
+        model: LMSTUDIO_MODEL,
         messages: [
           {
             role: 'system',
@@ -425,7 +424,7 @@ async function doubleCheckWithLLM(text, translation) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: LMSTUDIO_MODEL_LARGE,
+        model: LMSTUDIO_MODEL,
         messages: [
           {
             role: 'system',
@@ -779,7 +778,7 @@ async function main() {
     if (SKIP_TO_STEP <= 3) await step3_parseTranscriptAndCut();
 
     if (SKIP_TO_STEP <= 5) {
-      loadedModelId = await loadLMStudioModel(LMSTUDIO_MODEL_LARGE);
+      loadedModelId = await loadLMStudioModel(LMSTUDIO_MODEL);
       try {
         await step5_translate();
       } finally {
