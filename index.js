@@ -89,6 +89,7 @@ const LMSTUDIO_API_URL = 'http://localhost:1234'; // 'http://10.100.1.77:1234'; 
 const LMSTUDIO_V1_API = `${LMSTUDIO_API_URL}/api/v1`;
 const LMSTUDIO_MODEL = model || 'qwen/qwen3.6-35b-a3b';
 const LM_API_TOKEN = process.env.LM_API_TOKEN ?? 'none';
+const DEVICE = process.env.DEVICE ?? 'cuda'; // 'cuda' or 'cpu'
 
 function getLMStudioHeaders() {
   const headers = { 'Content-Type': 'application/json' };
@@ -197,8 +198,14 @@ async function step1b_separateAudio() {
   const input = tempVoiceFile; // твой исходный extracted audio
   const outDir = path.join(AUDIO_DIR, 'demucs');
 
-  run(`venv-ml\\Scripts\\python -m demucs --device cuda --two-stems=vocals --float32 -o "${outDir}" "${input}"`);
-  // run(`demucs --device cuda --two-stems=vocals --float32 -o "${outDir}" "${input}"`);
+  const python =
+    process.platform === 'win32'
+        ? 'venv-ml\\Scripts\\python.exe'
+        : './venv-ml/bin/python';
+
+  const cmd = `${python} -m demucs --device ${DEVICE} --two-stems=vocals --float32 -o "${outDir}" "${input}"`;
+  run(cmd);
+  // run(`demucs --device ${DEVICE} --two-stems=vocals --float32 -o "${outDir}" "${input}"`);
 
   const base = path.basename(input, path.extname(input));
   const demucsFolder = path.join(outDir, 'htdemucs', base);
@@ -293,7 +300,13 @@ function mergeSegmentsToSentences(segments) {
 
 async function step2_speechToText() {
   console.log('\n=== Step 2: Speech to text ==='); // small medium large large-v3 large-v3-turbo
-  run(`set PYTHONWARNINGS=ignore && venv-ml\\Scripts\\python -m whisper "${voiceFile}" --model large-v3 --output_format json --output_dir "${WORK_DIR}" --word_timestamps True`); // --language en
+  const python =
+    process.platform === 'win32'
+        ? 'set PYTHONWARNINGS=ignore && venv-ml\\Scripts\\python.exe'
+        : 'PYTHONWARNINGS=ignore ./venv-ml/bin/python';
+
+  const cmd = `${python} -m whisper "${voiceFile}" --model large-v3 --output_format json --output_dir "${WORK_DIR}" --word_timestamps True`;
+  run(cmd);
   if (fs.existsSync(textFile)) fs.renameSync(textFile, transcriptFile);
 }
 
@@ -410,11 +423,11 @@ async function initContext(fullText) {
       messages: [
         {
           role: 'system',
-          content: 'rules: ' + rules
-        },
-        {
-          role: 'system',
-          content: 'Translate text to ' + TRANSLATE_LANGUAGE + '. Output only the translation, nothing else.'
+          content: `
+          rules: ${rules}
+
+          Translate text to ${TRANSLATE_LANGUAGE}. Output only the translation, nothing else.
+          `
         },
         {
           role: 'user',
@@ -436,29 +449,23 @@ async function translateWithLLM(text, fullText, translatedFullText, duration) {
         messages: [
           {
             role: 'system',
-            content: 'Here are full text so you understand context of translation: ' + fullText
-          },
-          {
-            role: 'system',
-            content: 'Here are full translated text so you understand context of translation: ' + translatedFullText
-          },
-          {
-            role: 'system',
-            content: 'rules: ' + rules
-          },
-          {
-            role: 'system',
-            content: `Original voice duration is: ${duration} seconds.
+            content: `
+            Here are full text so you understand context of translation: ${fullText}
+
+            Here are full translated text so you understand context of translation: ${translatedFullText}
+            
+            rules: ${rules}
+
+            Original voice duration is: ${duration} seconds.
             Try to keep translation duration and amount of syllables similar by adapting translation if needed.
-            Do not make translation longer or with more syllables than original, if it's longer, adapt it or rephrase to fit duration.`
-          },
-          {
-            role: 'system',
-            content: 'Translate this part of text to ' + TRANSLATE_LANGUAGE + '. Output only translation AND ONLY FOR THIS PART and nothing else. IMPORTANT: translate only this part! Translation should not be longer than original text. If you add something from full text except this part, I will put you in jail!'
+            Do not make translation longer or with more syllables than original, if it's longer, adapt it or rephrase to fit duration.
+            
+            Translate this part of text to ${TRANSLATE_LANGUAGE}. Output only translation AND ONLY FOR THIS PART and nothing else. IMPORTANT: translate only this part! Translation should not be longer than original text. If you add something from full text except this part, I will put you in jail!
+            `
           },
           {
             role: 'user',
-            content: 'Translate ONLY this text: ' + text
+            content: `Translate ONLY this text: ${text}`
           }
         ],
 
@@ -564,7 +571,13 @@ async function step6_generateAudio() {
     const duration = Math.ceil(p.end - p.start);
     const textEscaped = p.translated.replace(/"/g, '\\"');
     const refTextEscaped = p.text.replace(/"/g, '\\"'); //  --ref-text="${refTextEscaped}"
-    const cmd = `generate_audio --model-dir models/base-1.7b --text="${textEscaped}" --ref-audio "${p.file}" --language ${VOICEOVER_LANGUAGE} --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
+    
+  const generate_audio =
+    process.platform === 'win32'
+        ? 'generate_audio'
+        : './generate_audio';
+
+    const cmd = `${generate_audio} --model-dir models/base-1.7b --text="${textEscaped}" --ref-audio "${p.file}" --language ${VOICEOVER_LANGUAGE} --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
     console.log(`  Generating (${duration}s): ${p.translated}`);
     run(cmd);
   }
