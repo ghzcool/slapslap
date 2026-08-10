@@ -89,6 +89,7 @@ const LMSTUDIO_API_URL = 'http://localhost:1234';
 const LMSTUDIO_V1_API = `${LMSTUDIO_API_URL}/api/v1`;
 const LMSTUDIO_MODEL = process.env.LM_MODEL || 'qwen/qwen3.6-35b-a3b';
 const LM_API_TOKEN = process.env.LM_API_TOKEN ?? 'none';
+const DEVICE = process.env.DEVICE ?? 'cuda'; // 'cuda' or 'cpu'
 
 function getLMStudioHeaders() {
   const headers = { 'Content-Type': 'application/json' };
@@ -197,8 +198,14 @@ async function step1b_separateAudio() {
   const input = tempVoiceFile; // твой исходный extracted audio
   const outDir = path.join(AUDIO_DIR, 'demucs');
 
-  run(`venv-ml\\Scripts\\python -m demucs --device cuda --two-stems=vocals --float32 -o "${outDir}" "${input}"`);
-  // run(`demucs --device cuda --two-stems=vocals --float32 -o "${outDir}" "${input}"`);
+  const python =
+    process.platform === 'win32'
+        ? 'venv-ml\\Scripts\\python.exe'
+        : './venv-ml/bin/python';
+
+  const cmd = `${python} -m demucs --device ${DEVICE} --two-stems=vocals --float32 -o "${outDir}" "${input}"`;
+  run(cmd);
+  // run(`demucs --device ${DEVICE} --two-stems=vocals --float32 -o "${outDir}" "${input}"`);
 
   const base = path.basename(input, path.extname(input));
   const demucsFolder = path.join(outDir, 'htdemucs', base);
@@ -293,7 +300,13 @@ function mergeSegmentsToSentences(segments) {
 
 async function step2_speechToText() {
   console.log('\n=== Step 2: Speech to text ==='); // small medium large large-v3 large-v3-turbo
-  run(`set PYTHONWARNINGS=ignore && venv-ml\\Scripts\\python -m whisper "${voiceFile}" --model large-v3 --output_format json --output_dir "${WORK_DIR}" --word_timestamps True`); // --language en
+  const python =
+    process.platform === 'win32'
+        ? 'set PYTHONWARNINGS=ignore && venv-ml\\Scripts\\python.exe'
+        : 'PYTHONWARNINGS=ignore ./venv-ml/bin/python';
+
+  const cmd = `${python} -m whisper "${voiceFile}" --model large-v3 --output_format json --output_dir "${WORK_DIR}" --word_timestamps True --condition_on_previous_text False`;
+  run(cmd);
   if (fs.existsSync(textFile)) fs.renameSync(textFile, transcriptFile);
 }
 
@@ -328,15 +341,14 @@ async function step3_parseTranscriptAndCut() {
   saveParts();
 }
 // Make corrections to this text and restore it as good as possible.
-const rules = `This text is generated from speech recognition and may contain errors.
+const rules = `You are professional translator, your task is to translate text.
 Keep same style for translation as in original so not only words are translated but also sence and emotion and style of speech are preserved.
 Write numbers as text.
 THIS IS IMPORTANT: Do not write numbers as numbers "с 2017 года" should be "с две тысячи семнадцатого года"!
-This translation will be used for dub voiceover so keep length very similar to original (not text length but audio length) adapt translation or rephrase if needed.
+This translation will be used for dub voiceover so try to keep length very similar to original (not text length but audio length) adapt translation or rephrase if needed.
 IMPORTANT: Do not translate names and titles.
-Do not translate technical terms that you dont understand in context.
+Do not translate technical terms that you dont understand meaning in current context.
 Use words instead of numbers like "четвёртое июля" and not "4 июля".
-Voice will be generated for this text.
 Translation should not be longer than original text or voicover will be out of sync.`;
 
 async function fetchStream(body) {
@@ -409,16 +421,15 @@ async function initContext(fullText) {
     model: LMSTUDIO_MODEL,
       messages: [
         {
-          role: 'system',
-          content: 'rules: ' + rules
-        },
-        {
-          role: 'system',
-          content: 'Translate text to ' + TRANSLATE_LANGUAGE + '. Output only the translation, nothing else.'
-        },
-        {
           role: 'user',
-          content: fullText
+          content: `
+          rules: ${rules}
+
+          Translate text to ${TRANSLATE_LANGUAGE}. Output only the translation, nothing else.
+		  
+		  Full text:
+          ` + 
+		  fullText
         }
       ],
       temperature: 0,
@@ -435,30 +446,22 @@ async function translateWithLLM(text, fullText, translatedFullText, duration) {
         model: LMSTUDIO_MODEL,
         messages: [
           {
-            role: 'system',
-            content: 'Here are full text so you understand context of translation: ' + fullText
-          },
-          {
-            role: 'system',
-            content: 'Here are full translated text so you understand context of translation: ' + translatedFullText
-          },
-          {
-            role: 'system',
-            content: 'rules: ' + rules
-          },
-          {
-            role: 'system',
-            content: `Original voice duration is: ${duration} seconds.
-            Try to keep translation duration and amount of syllables similar by adapting translation if needed.
-            Do not make translation longer or with more syllables than original, if it's longer, adapt it or rephrase to fit duration.`
-          },
-          {
-            role: 'system',
-            content: 'Translate this part of text to ' + TRANSLATE_LANGUAGE + '. Output only translation AND ONLY FOR THIS PART and nothing else. IMPORTANT: translate only this part! Translation should not be longer than original text. If you add something from full text except this part, I will put you in jail!'
-          },
-          {
             role: 'user',
-            content: 'Translate ONLY this text: ' + text
+            content: `
+            Here are full text so you understand context of translation: '${fullText}'
+
+            Here are full translated text so you understand context of translation: '${translatedFullText}'
+            
+            rules: ${rules}
+
+            Original voice duration for current part is: ${duration} seconds.
+            Try to keep translation duration and amount of syllables similar by adapting translation if needed.
+            Do not make translation longer or with more syllables than original, if it's longer, adapt it or rephrase to fit duration.
+            
+            Translate this part of text to ${TRANSLATE_LANGUAGE}. Output only translation AND ONLY FOR THIS PART and nothing else. IMPORTANT: translate only this part! Translation should not be longer than original text. If you add something from full text except this part, I will put you in jail!
+            
+			Return only translation and nothing else!
+			Translate ONLY this text: '${text}'`
           }
         ],
 
@@ -487,18 +490,16 @@ async function doubleCheckWithLLM(text, translation) {
         model: LMSTUDIO_MODEL,
         messages: [
           {
-            role: 'system',
+            role: 'user',
             content: `I have a script that cut translated text and make pairs of original and translated text parts.
             This script sometimes fails and cut in wrong place so extra part of text is in translation.
             Your task is to double-check the translation and ensure it does not contain any extra text.
             Please return only the translation without extra text and without any explanations.
             Don't change or rephrase translation, just remove extra text if it is there.
             There are chance that script cuts totally wrong part of text, in this case please translate original text.
-            But PLEASE, do not change normally translated text! If it's not totally wrong part and don't have extra text, just return it as is.`
-          },
-          {
-            role: 'user',
-            content: `Original text: "${text}".
+            But PLEASE, do not change normally translated text! If it's not totally wrong part and don't have extra text, just return it as is.
+			
+			Original text: "${text}".
             Translated to ${TRANSLATE_LANGUAGE} text: "${translation}".`
           }
         ],
@@ -564,7 +565,13 @@ async function step6_generateAudio() {
     const duration = Math.ceil(p.end - p.start);
     const textEscaped = p.translated.replace(/"/g, '\\"');
     const refTextEscaped = p.text.replace(/"/g, '\\"'); //  --ref-text="${refTextEscaped}"
-    const cmd = `generate_audio --model-dir models/base-1.7b --text="${textEscaped}" --ref-audio "${p.file}" --language ${VOICEOVER_LANGUAGE} --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
+    
+  const generate_audio =
+    process.platform === 'win32'
+        ? 'generate_audio'
+        : './generate_audio';
+
+    const cmd = `${generate_audio} --model-dir models/base-1.7b --text="${textEscaped}" --ref-audio "${p.file}" --language ${VOICEOVER_LANGUAGE} --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
     console.log(`  Generating (${duration}s): ${p.translated}`);
     run(cmd);
   }

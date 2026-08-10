@@ -1,4 +1,4 @@
-/models/base-1.7b
+/models/base-1.7b/model.safetensors
 /work
 /venv-ml
 /*.mp4

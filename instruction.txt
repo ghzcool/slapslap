@@ -1,0 +1,72 @@
+To run F5-TTS on an AMD x86 PC running Fedora Linux, you will need to set up a Python script that utilizes ROCm (AMD’s equivalent to NVIDIA CUDA) so your hardware accelerates the generation instead of relying on the slow CPU.
+Because F5-TTS is a separate project, you cannot use your existing ./generate_audio executable. Instead, you will create a small Python wrapper script (f5_generate.py) and update your Node.js code to execute it using python3.
+Here is the step-by-step guide to installing and integrating F5-TTS into your workflow.
+------------------------------
+## Step 1: Install Dependencies on Fedora
+Open your terminal and make sure your system has the necessary build tools and audio libraries.
+
+sudo dnf install git python3-pip python3-devel ffmpeg-free
+
+## Step 2: Install PyTorch with AMD ROCm Support
+To leverage your AMD GPU, you must install the specific version of PyTorch compiled for ROCm. Run the following command to install it via pip:
+
+pip3 install torch torchvision torchaudio --index-url https://pytorch.org
+
+(Note: If your AMD card is a consumer Radeon card that isn't officially listed by ROCm, you may need to prefix your final script runs with HSA_OVERRIDE_GFX_VERSION=10.3.0 or 11.0.0 depending on your GPU generation).
+## Step 3: Install F5-TTS
+Install the core F5-TTS package directly from PyPI:
+
+pip3 install f5-tts
+
+------------------------------
+## Step 4: Create the Python Wrapper Script
+Create a new file named f5_generate.py in your project folder. This script will act as your new CLI executable, accepting arguments passed from your Node.js script.
+
+# f5_generate.pyimport argparseimport sysfrom f5_tts.api import F5TTS
+def main():
+    parser = argparse.ArgumentParser(description="F5-TTS Node.js Wrapper")
+    parser.add_init = True
+    parser.add_argument("--text", required=True, help="Text to synthesize")
+    parser.add_argument("--ref-audio", required=True, help="Path to reference audio file")
+    parser.add_argument("--output", required=True, help="Path to save output .wav")
+    
+    # Optional: F5-TTS extracts ref_text automatically via Whisper, 
+    # but providing it explicitly improves voice cloning accuracy.
+    parser.add_argument("--ref-text", default="", help="Transcription of the reference audio")
+    
+    args = parser.parse_args()
+
+    print(f"Initializing F5-TTS on AMD GPU...", flush=True)
+    # F5-TTS automatically downloads the weights on the first run (~2.4GB)
+    tts = F5TTS()
+
+    print(f"Generating audio...", flush=True)
+    # Generate the audio array
+    wav, sr, spect = tts.generate(
+        fast_inference=True, # Dramatically improves speed on AMD
+        gen_text=args.text,
+        ref_audio=args.ref_audio,
+        ref_text=args.ref_text if args.ref_text else None
+    )
+
+    # Save the file using F5-TTS utility or soundfile
+    import soundfile as sf
+    sf.write(args.output, wav, sr)
+    print(f"Success: Audio saved to {args.output}", flush=True)
+if __name__ == "__main__":
+    main()
+
+------------------------------
+## Step 5: Update Your Node.js Script
+Now, modify your Node.js script to call python3 f5_generate.py instead of the old ./generate_audio binary. F5-TTS handles duration and repetition penalties automatically via its flow-matching architecture, so we can strip those arguments out.
+
+// Escape quotes in your text string safelyconst textEscaped = text.replace(/"/g, '\\"');
+// Point to your new python scriptconst cmd = `python3 f5_generate.py --text="${textEscaped}" --ref-audio "${p.file}" --output "${out}"`;
+
+console.log(`  Generating via F5-TTS (${duration}s): ${p.translated}`);
+run(cmd);
+
+## First-Run Expectation
+The very first time your Node script calls the new command, Python will automatically download the F5-TTS model weights from Hugging Face into your ~/.cache directory. This takes a few minutes depending on your internet connection. Subsequent runs will start instantly.
+Would you like help writing an automatic fallback line into your Node.js environment checks to detect if python3 or ROCm is missing before executing the command?
+
