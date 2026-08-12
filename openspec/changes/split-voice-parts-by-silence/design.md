@@ -32,7 +32,7 @@ Downstream steps 5 (translate), 6 (TTS), 7 (join), 8 (mix), 9 (video) all consum
 Run `ffmpeg -i voice.wav -af silencedetect=noise=SILENCE_NOISE_DB:d=MIN_SILENCE_CUT -f null -` and parse `silence_start` / `silence_end` lines from the combined output (append `2>&1`, ffmpeg writes them to stderr; on Windows capture combined stdout). 
 
 - Voice intervals are the spans **between** a `silence_end` and the next `silence_start`, plus the head/tail spans implied by the file duration. This naturally trims leading and trailing silence (a file-start `silence_start: 0` or file-end `silence_end` collapses them to zero-length edges).
-- Constants: `SILENCE_NOISE_DB = -35` (voice-separated audio is quiet between utterances), `MIN_SILENCE_CUT = 1.0` s.
+- Constants: `SILENCE_NOISE_DB = -25` (tuned from -35 after dorohedoro.mp4 run: anime vocals carry a music bleed floor around -23 to -30 dB, so -35 missed all but the tail silence; -25 cleanly separates intro/outro music from dialogue), `MIN_SILENCE_CUT = 1.0` s.
 - *Alternative considered:* `silenceremove` trims audio in-place but destroys the original timing, which we need for TTS ref-audio and join. `pydub` would add a dependency. Rejected.
 
 ### 2. Noise + length filtering per candidate fragment
@@ -74,4 +74,4 @@ All new constants live with the other pipeline config near the top of `index.js`
 
 ## Open Questions
 
-- Default `SILENCE_NOISE_DB = -35` and `VOLUME_MIN_DB = -40` are starting points; confirm/adjust after a `sample.mp4` run (the constants make this a one-line change).
+- Default `SILENCE_NOISE_DB = -25` and `VOLUME_MIN_DB = -40` were tuned after `sample.mp4` and `dorohedoro.mp4` runs (the constants make this a one-line change).

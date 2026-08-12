@@ -44,6 +44,7 @@ npx slapslap sample.mp4              # runs all steps, default language = russia
 - `doubleCheckWithLLM` is commented out in `step5` by default.
 - `step9_makeVideo` mixes original voice at 0.2 volume into the final audio — this replaced the old version.
 - Demucs output path is `work/audio/demucs/htdemucs/<basename>/vocals.wav` and `no_vocals.wav`.
+- Steps 2–3 split `voice.wav` into voice parts by silence (`ffmpeg silencedetect`) and transcribe each part individually with Whisper — the whole-track `transcript.json` / `voice.json` is no longer produced or required.
 - `generate_audio.exe` is called with `--ref-audio` pointing to each original part for voice cloning — do not change the ref-audio logic.
 
 ## Subagent workflow

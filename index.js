@@ -91,6 +91,13 @@ const LMSTUDIO_MODEL = process.env.LM_MODEL || 'qwen/qwen3.6-35b-a3b';
 const LM_API_TOKEN = process.env.LM_API_TOKEN ?? 'none';
 const DEVICE = process.env.DEVICE ?? 'cuda'; // 'cuda' or 'cpu'
 
+const MIN_SILENCE_CUT = 1.0;
+const SILENCE_NOISE_DB = -25;
+const VOLUME_MIN_DB = -40;
+const MIN_PART_SECONDS = 0.1;
+const PADDING_SECONDS = 0.1;
+const MAX_PART_SECONDS = 15;
+
 function getLMStudioHeaders() {
   const headers = { 'Content-Type': 'application/json' };
   if (LM_API_TOKEN) {
@@ -152,8 +159,6 @@ const tempVoiceFile = path.join(AUDIO_DIR, '_voice.wav');
 const noVoiceFile = path.join(AUDIO_DIR, 'no_voice.wav');
 const translatedVoiceFile = path.join(AUDIO_DIR, 'translated_voice.wav');
 const combinedAudio = path.join(AUDIO_DIR, 'combined.wav');
-const textFile = path.join(WORK_DIR, 'voice.json');
-const transcriptFile = path.join(WORK_DIR, 'transcript.json');
 
 let parts = [];
 
@@ -298,45 +303,135 @@ function mergeSegmentsToSentences(segments) {
   return merged;
 }
 
-async function step2_speechToText() {
-  console.log('\n=== Step 2: Speech to text ==='); // small medium large large-v3 large-v3-turbo
-  const python =
-    process.platform === 'win32'
-        ? 'set PYTHONWARNINGS=ignore && venv-ml\\Scripts\\python.exe'
-        : 'PYTHONWARNINGS=ignore ./venv-ml/bin/python';
+async function step2_splitBySilence() {
+  console.log('\n=== Step 2: Split voice track by silence ===');
+  if (!fs.existsSync(voiceFile)) throw new Error('voice.wav not found');
 
-  const cmd = `${python} -m whisper "${voiceFile}" --model large-v3 --output_format json --output_dir "${WORK_DIR}" --word_timestamps True --condition_on_previous_text False`;
-  run(cmd);
-  if (fs.existsSync(textFile)) fs.renameSync(textFile, transcriptFile);
-}
+  const duration = getDuration(voiceFile);
+  if (!duration) throw new Error('Failed to get voice.wav duration');
 
-async function step3_parseTranscriptAndCut() {
-  console.log('\n=== Step 3: Parse transcript and cut audio parts ===');
-  if (!fs.existsSync(transcriptFile)) throw new Error('transcript.json not found');
+  const probeCmd = `ffmpeg -i "${voiceFile}" -af silencedetect=noise=${SILENCE_NOISE_DB}dB:d=${MIN_SILENCE_CUT} -f null - 2>&1`;
+  console.log(`> ${probeCmd}`);
+  const out = execSync(probeCmd, { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 }).toString();
 
-  const data = JSON.parse(fs.readFileSync(transcriptFile, 'utf8'));
+  const events = [];
+  let m;
+  const startRe = /silence_start:\s*([\d.]+)/g;
+  while ((m = startRe.exec(out)) !== null) events.push({ time: parseFloat(m[1]), type: 'start' });
+  const endRe = /silence_end:\s*([\d.]+)/g;
+  while ((m = endRe.exec(out)) !== null) events.push({ time: parseFloat(m[1]), type: 'end' });
+  events.sort((a, b) => a.time - b.time);
 
-  if (!data.segments) throw new Error('transcript.json missing segments');
+  const candidates = [];
+  let cursor = 0;
+  for (const ev of events) {
+    if (ev.type === 'start') {
+      if (ev.time > cursor + 1e-9) candidates.push({ start: cursor, end: ev.time });
+      cursor = ev.time;
+    } else {
+      cursor = Math.max(cursor, ev.time);
+    }
+  }
+  if (duration > cursor + 1e-9) candidates.push({ start: cursor, end: duration });
 
-  const sentences = mergeSegmentsToSentences(data.segments);
+  console.log(`Detected ${candidates.length} candidate voice intervals`);
 
-  parts = sentences.map((sent, i) => ({
-    start: sent.start,
-    end: sent.end,
-    text: sent.text,
+  const kept = [];
+  for (const c of candidates) {
+    const volCmd = `ffmpeg -ss ${c.start} -t ${c.end - c.start} -i "${voiceFile}" -af volumedetect -f null - 2>&1`;
+    console.log(`> ${volCmd}`);
+    const volOut = execSync(volCmd, { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 }).toString();
+    const volMatches = [...volOut.matchAll(/mean_volume:\s*(-?[\d.]+) dB/g)].map(mm => parseFloat(mm[1]));
+    const meanVolume = volMatches.length ? Math.max(...volMatches) : -Infinity;
+    if (meanVolume < VOLUME_MIN_DB) {
+      console.log(`  Drop (quiet): ${c.start.toFixed(2)}s-${c.end.toFixed(2)}s (${meanVolume.toFixed(1)} dB)`);
+      continue;
+    }
+    if (c.end - c.start < MIN_PART_SECONDS) {
+      console.log(`  Drop (short): ${c.start.toFixed(2)}s-${c.end.toFixed(2)}s`);
+      continue;
+    }
+    kept.push(c);
+  }
+
+  parts = kept.map(c => ({
+    start: c.start,
+    end: c.end,
+    text: '',
     translated: '',
     file: ''
-  })).filter(p => p.end - p.start > 0.3); // фильтр коротких частей
+  }));
 
   if (!fs.existsSync(PARTS_DIR)) fs.mkdirSync(PARTS_DIR, { recursive: true });
-
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i];
     const filename = `part_${String(i).padStart(3, '0')}.wav`;
     p.file = path.join(PARTS_DIR, filename);
-    
+    const cutStart = Math.max(0, p.start - PADDING_SECONDS);
+    const cutEnd = Math.min(duration, p.end + PADDING_SECONDS);
     console.log(`  Cut: ${filename} (${p.start.toFixed(2)}s - ${p.end.toFixed(2)}s)`);
-    run(`ffmpeg -i "${voiceFile}" -ss ${p.start} -to ${p.end} -c copy "${p.file}" -y`);
+    run(`ffmpeg -i "${voiceFile}" -ss ${cutStart} -to ${cutEnd} -c copy "${p.file}" -y`);
+  }
+  saveParts();
+}
+
+async function step3_transcribeParts() {
+  console.log('\n=== Step 3: Transcribe each voice part ===');
+  if (!loadParts()) throw new Error('No parts.json (run step 2 first)');
+
+  const python =
+    process.platform === 'win32'
+        ? 'set PYTHONWARNINGS=ignore && set PYTHONIOENCODING=utf-8 && venv-ml\\Scripts\\python.exe'
+        : 'PYTHONWARNINGS=ignore PYTHONIOENCODING=utf-8 ./venv-ml/bin/python';
+
+  const duration = getDuration(voiceFile);
+  const finalParts = [];
+
+  for (const p of parts) {
+    if (!p.file || !fs.existsSync(p.file)) throw new Error(`Missing part file: ${p.file}`);
+
+    const baseName = path.basename(p.file, path.extname(p.file));
+    const partDir = path.join(WORK_DIR, `whisper_${baseName}`);
+    if (!fs.existsSync(partDir)) fs.mkdirSync(partDir, { recursive: true });
+
+    const cmd = `${python} -m whisper "${p.file}" --model large-v3 --output_format json --output_dir "${partDir}" --word_timestamps True --condition_on_previous_text False`;
+    run(cmd);
+
+    const jsonFile = path.join(partDir, `${baseName}.json`);
+    if (!fs.existsSync(jsonFile)) throw new Error(`Whisper JSON not found: ${jsonFile}`);
+
+    const data = JSON.parse(fs.readFileSync(jsonFile, 'utf8'));
+
+    const words = [];
+    for (const seg of data.segments || []) {
+      for (const w of seg.words || []) {
+        words.push({ start: w.start + p.start, end: w.end + p.start, word: w.word });
+      }
+    }
+
+    p.text = words.map(w => w.word).join('').trim();
+
+    if (p.end - p.start > MAX_PART_SECONDS) {
+      const sentences = mergeSegmentsToSentences([{ words }]);
+      for (const s of sentences) {
+        finalParts.push({ start: s.start, end: s.end, text: s.text, translated: '', file: '' });
+      }
+    } else {
+      finalParts.push(p);
+    }
+  }
+
+  parts = finalParts;
+
+  if (!fs.existsSync(PARTS_DIR)) fs.mkdirSync(PARTS_DIR, { recursive: true });
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    const filename = `part_${String(i).padStart(3, '0')}.wav`;
+    p.file = path.join(PARTS_DIR, filename);
+    const cutStart = Math.max(0, p.start - PADDING_SECONDS);
+    const cutEnd = duration ? Math.min(duration, p.end + PADDING_SECONDS) : p.end + PADDING_SECONDS;
+    console.log(`  Cut: ${filename} (${p.start.toFixed(2)}s - ${p.end.toFixed(2)}s)`);
+    run(`ffmpeg -i "${voiceFile}" -ss ${cutStart} -to ${cutEnd} -c copy "${p.file}" -y`);
   }
   saveParts();
 }
@@ -611,20 +706,11 @@ async function step7_joinAudio() {
   const filterChains = [];
   const partLabels = [];
 
-  const allWords = [];
-  
-  const data = JSON.parse(fs.readFileSync(transcriptFile, 'utf8'));
-
-  if (!data.segments) throw new Error('transcript.json missing segments');
-  for (const seg of data.segments) {
-    for (const w of seg.words || []) {
-      allWords.push(w);
-    }
-  }
+  const sortedParts = [...validParts].sort((a, b) => a.start - b.start);
 
   let inputIdx = 0;
 
-  for (const p of validParts) {
+  for (const p of sortedParts) {
     const translatedDuration = getDuration(p.translatedFile);
 
   if (!translatedDuration) {
@@ -634,9 +720,10 @@ async function step7_joinAudio() {
 
   args.push('-i', p.translatedFile);
 
-  // соседние слова
-  const nextWord = allWords.find(w => w.start > p.end);
-  const prevWord = allWords.findLast(w => w.end < p.start);
+  // соседние части
+  const idx = sortedParts.indexOf(p);
+  const prevPart = idx > 0 ? sortedParts[idx - 1] : null;
+  const nextPart = idx < sortedParts.length - 1 ? sortedParts[idx + 1] : null;
 
   // оригинальное окно
   const originalStart = p.start;
@@ -644,12 +731,12 @@ async function step7_joinAudio() {
   const originalDuration = originalEnd - originalStart;
 
   // доступные промежутки
-  const gapBefore = prevWord
-    ? Math.max(0, originalStart - prevWord.end)
+  const gapBefore = prevPart
+    ? Math.max(0, originalStart - prevPart.end)
     : 0;
 
-  const gapAfter = nextWord
-    ? Math.max(0, nextWord.start - originalEnd)
+  const gapAfter = nextPart
+    ? Math.max(0, nextPart.start - originalEnd)
     : 0;
 
   // можно использовать максимум половину промежутков
@@ -861,8 +948,8 @@ async function main() {
   let loadedModelId = null;
   try {
     if (SKIP_TO_STEP_FINAL <= 1) await step1_extractAudio();
-    if (SKIP_TO_STEP_FINAL <= 2) await step2_speechToText();
-    if (SKIP_TO_STEP_FINAL <= 3) await step3_parseTranscriptAndCut();
+    if (SKIP_TO_STEP_FINAL <= 2) await step2_splitBySilence();
+    if (SKIP_TO_STEP_FINAL <= 3) await step3_transcribeParts();
 
     // Step 4 was removed from the pipeline
 
