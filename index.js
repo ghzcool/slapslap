@@ -869,7 +869,7 @@ async function step8_mixVoiceWithBackground() {
     '-filter_complex',
     `
     [0:a]volume=1.0[bg];
-    [1:a]volume=1.2[voice];
+    [1:a]volume=1.5[voice];
     [bg][voice]amix=inputs=2:duration=longest:normalize=0[out]
     `,
     '-map', '[out]',
