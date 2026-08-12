@@ -55,6 +55,12 @@ npx slapslap sample.mp4              # runs all steps, default language = russia
 - Never skip the tester review step.
 - Also use tester if task requires that.
 
+## Skills
+
+- **grill-me** — a relentless interview to sharpen a plan or design. Invokes `/grilling`.
+- **grilling** — stress-test a plan, decision, or idea by interviewing the user relentlessly until a shared understanding is reached (design tree in rounds).
+- **handoff** — compact the current conversation into a handoff document (saved to the OS temp dir) so a fresh agent can continue the work.
+
 ## Testing / verification
 
 - No automated tests. Just review code.
