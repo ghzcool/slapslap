@@ -85,9 +85,9 @@ const SKIP_TO_STEP_FINAL = SKIP_TO_STEP || 0;
 const TRANSLATE_LANGUAGE = LANGUAGE ?? 'russian';
 const VOICEOVER_LANGUAGE = LANGUAGE ?? 'russian';
 
-const LMSTUDIO_API_URL = 'http://localhost:1234'; // 'http://10.100.1.77:1234'; //
+const LMSTUDIO_API_URL = 'http://localhost:1234';
 const LMSTUDIO_V1_API = `${LMSTUDIO_API_URL}/api/v1`;
-const LMSTUDIO_MODEL = model || 'qwen/qwen3.6-35b-a3b';
+const LMSTUDIO_MODEL = process.env.LM_MODEL || 'qwen/qwen3.6-35b-a3b';
 const LM_API_TOKEN = process.env.LM_API_TOKEN ?? 'none';
 const DEVICE = process.env.DEVICE ?? 'cuda'; // 'cuda' or 'cpu'
 
@@ -866,7 +866,7 @@ async function main() {
 
     // Step 4 was removed from the pipeline
 
-    if (SKIP_TO_STEP_FINAL <= 5) {
+    if (SKIP_TO_STEP <= 5) {
       loadedModelId = await loadLMStudioModel(LMSTUDIO_MODEL);
       try {
         await step5_translate();
