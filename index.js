@@ -347,6 +347,7 @@ async function llmFindSentenceSplits(text) {
         {
           role: 'user',
           content: `The text below is a single long sentence from a video. It is too long to be processed as one dubbing part, so split it into the smallest number of natural parts (usually 2-3) at real semantic boundaries (after clauses, commas, conjunctions like and/but/because, etc.) so each part keeps its meaning and the parts join back together without losing sense.
+          If there are no good semantic boundaries, split at most logical place so that no part exceeds ${MAX_PART_SECONDS} seconds of speech.
 
 Strict rules:
 - Keep every word and punctuation EXACTLY as in the original. Do not add, remove, reorder or rephrase anything.
