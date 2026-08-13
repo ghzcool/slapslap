@@ -309,7 +309,12 @@ async function splitLongSentenceWithLLM(sentence) {
 
   try {
     const llmParts = await llmFindSentenceSplits(sentence.text);
-    const mapped = mapLlmPartsToWords(llmParts, words);
+    let mapped = mapLlmPartsToWords(llmParts, words);
+    let method = 'exact';
+    if (!mapped) {
+      mapped = mapLlmPartsProportional(llmParts, words);
+      method = 'proportional';
+    }
     if (mapped && mapped.length > 1) {
       const result = [];
       for (const sub of mapped) {
@@ -320,7 +325,7 @@ async function splitLongSentenceWithLLM(sentence) {
         }
       }
       if (result.length) {
-        console.log(`  LLM split into ${result.length} parts: "${sentence.text}"`);
+        console.log(`  LLM split (${method}) into ${result.length} parts: "${sentence.text}"`);
         return result;
       }
     }
@@ -328,6 +333,7 @@ async function splitLongSentenceWithLLM(sentence) {
     console.warn(`  LLM split failed for "${sentence.text}": ${e.message}`);
   }
 
+  console.warn(`  Using duration-based fallback split for: "${sentence.text}"`);
   return cutByWordBoundaries(sentence, maxDur);
 }
 
@@ -340,10 +346,11 @@ async function llmFindSentenceSplits(text) {
       messages: [
         {
           role: 'user',
-          content: `The text below is a single long sentence from a video. It is too long to be processed as one dubbing part, so split it into several parts at natural semantic boundaries (after clauses, commas, conjunctions like and/but/because, etc.) so each part keeps its meaning and the parts join back together without losing sense.
+          content: `The text below is a single long sentence from a video. It is too long to be processed as one dubbing part, so split it into the smallest number of natural parts (usually 2-3) at real semantic boundaries (after clauses, commas, conjunctions like and/but/because, etc.) so each part keeps its meaning and the parts join back together without losing sense.
 
 Strict rules:
 - Keep every word and punctuation EXACTLY as in the original. Do not add, remove, reorder or rephrase anything.
+- Never cut in the middle of a clause or right after a single word.
 - Keep the parts in the same order as the original.
 - Each part must be a natural, self-contained chunk.
 - Return ONLY a JSON array of the parts as strings, nothing else.
@@ -353,7 +360,7 @@ ${text}`
         }
       ],
       temperature: 0,
-      max_tokens: Math.min(Math.ceil(text.length * 1.5), 2048),
+      max_tokens: Math.min(Math.ceil(text.length * 2), 4096),
       stop: ["<think>"],
       chat_template_kwargs: { enable_thinking: false }
     })
@@ -419,6 +426,45 @@ function mapLlmPartsToWords(llmParts, words) {
   }
 
   if (covered !== normWords.length) return null;
+
+  return result;
+}
+
+// Fallback mapping: place LLM chunk boundaries by the chunks' relative word
+// counts, snapped to the original word boundaries. Covers every original word
+// exactly once, so content is never lost even if the LLM rephrased some words.
+function mapLlmPartsProportional(llmParts, words) {
+  if (!llmParts.length || !words.length) return null;
+
+  const countWords = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}'\s]/gu, ' ').split(/\s+/).filter(Boolean).length;
+  const counts = llmParts.map(countWords);
+  const total = counts.reduce((a, b) => a + b, 0);
+  if (!total) return null;
+
+  const N = words.length;
+  const result = [];
+  let startIdx = 0;
+  let cum = 0;
+
+  for (let i = 0; i < counts.length; i++) {
+    cum += counts[i];
+    let endIdx;
+    if (i === counts.length - 1) {
+      endIdx = N;
+    } else {
+      const remainingParts = counts.length - 1 - i;
+      endIdx = Math.max(startIdx + 1, Math.min(N - remainingParts, Math.round(cum * N / total)));
+    }
+
+    const rangeWords = words.slice(startIdx, endIdx);
+    result.push({
+      start: rangeWords[0].start,
+      end: rangeWords[rangeWords.length - 1].end,
+      text: rangeWords.map(x => x.word).join('').trim(),
+      words: rangeWords
+    });
+    startIdx = endIdx;
+  }
 
   return result;
 }
