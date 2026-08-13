@@ -241,10 +241,25 @@ function mergeSegmentsToSentences(segments) {
   const isSentenceEnd = (word) =>
     /[.!?]["']?$/.test(word);
 
+  // short pause between phrases/speakers should also split
+  const PAUSE_THRESHOLD = 0.75;
+
   let currentWords = [];
   let currentStart = null;
 
-  const PAUSE_THRESHOLD = 2;
+  // split BEFORE a word would push the chunk past the TTS max length,
+  // so every emitted part is guaranteed to be <= MAX_PART_SECONDS
+  const flush = (endTime) => {
+    merged.push({
+      id: id++,
+      seek: 0,
+      start: currentStart,
+      end: endTime,
+      text: currentWords.map(x => x.word).join('').trim()
+    });
+    currentWords = [];
+    currentStart = null;
+  };
 
   for (let i = 0; i < allWords.length; i++) {
     const w = allWords[i];
@@ -255,6 +270,16 @@ function mergeSegmentsToSentences(segments) {
       currentStart = w.start;
     }
 
+    const isTooLong = (w.end - currentStart > MAX_PART_SECONDS);
+    if (isTooLong) {
+      // 🔑 gap-based extension (your previous improvement)
+      const prevEnd = currentWords[currentWords.length - 1].end;
+      const gap = w.start - prevEnd;
+      const extension = Math.min(gap / 2, 0.2);
+      flush(prevEnd + extension);
+      currentStart = w.start;
+    }
+
     currentWords.push(w);
 
     const isEndByPunctuation = isSentenceEnd(cleanWord);
@@ -262,42 +287,17 @@ function mergeSegmentsToSentences(segments) {
     const isEndByPause =
       nextWord && (nextWord.start - w.end > PAUSE_THRESHOLD);
 
-      const isTooLong = (w.end - currentStart > 15); // hard limit to avoid very long sentences
-
-    const shouldSplit =
-      (isEndByPunctuation || isEndByPause || isTooLong) && nextWord;
-
-    if (shouldSplit) {
-      const sentenceEndTime = w.end;
-
+    if ((isEndByPunctuation || isEndByPause) && nextWord) {
       // 🔑 gap-based extension (your previous improvement)
-      const gap = nextWord.start - sentenceEndTime;
-      let extension = Math.min(gap / 2, 0.2);
-
-      const sentenceText = currentWords.map(x => x.word).join('').trim();
-
-      merged.push({
-        id: id++,
-        seek: 0,
-        start: currentStart,
-        end: sentenceEndTime + extension,
-        text: sentenceText
-      });
-
-      currentWords = [];
-      currentStart = null;
+      const gap = nextWord.start - w.end;
+      const extension = Math.min(gap / 2, 0.2);
+      flush(w.end + extension);
     }
   }
 
-  // leftover
+  // leftover (guaranteed <= MAX_PART_SECONDS by the isTooLong check above)
   if (currentWords.length) {
-    merged.push({
-      id: id++,
-      seek: 0,
-      start: currentStart,
-      end: currentWords[currentWords.length - 1].end,
-      text: currentWords.map(x => x.word).join('').trim()
-    });
+    flush(currentWords[currentWords.length - 1].end);
   }
 
   return merged;
@@ -411,13 +411,13 @@ async function step3_transcribeParts() {
 
     p.text = words.map(w => w.word).join('').trim();
 
-    if (p.end - p.start > MAX_PART_SECONDS) {
+    let newParts = [p];
+    if (words.length) {
       const sentences = mergeSegmentsToSentences([{ words }]);
-      for (const s of sentences) {
-        finalParts.push({ start: s.start, end: s.end, text: s.text, translated: '', file: '' });
-      }
-    } else {
-      finalParts.push(p);
+      if (sentences.length) newParts = sentences;
+    }
+    for (const s of newParts) {
+      finalParts.push({ start: s.start, end: s.end, text: s.text, translated: '', file: '' });
     }
   }
 
