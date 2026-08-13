@@ -247,15 +247,15 @@ function mergeSegmentsToSentences(segments) {
   let currentWords = [];
   let currentStart = null;
 
-  // split BEFORE a word would push the chunk past the TTS max length,
-  // so every emitted part is guaranteed to be <= MAX_PART_SECONDS
   const flush = (endTime) => {
+    if (!currentWords.length) return;
     merged.push({
       id: id++,
       seek: 0,
       start: currentStart,
       end: endTime,
-      text: currentWords.map(x => x.word).join('').trim()
+      text: currentWords.map(x => x.word).join('').trim(),
+      words: currentWords.slice()
     });
     currentWords = [];
     currentStart = null;
@@ -267,16 +267,6 @@ function mergeSegmentsToSentences(segments) {
     const nextWord = allWords[i + 1];
 
     if (!currentWords.length) {
-      currentStart = w.start;
-    }
-
-    const isTooLong = (w.end - currentStart > MAX_PART_SECONDS);
-    if (isTooLong) {
-      // 🔑 gap-based extension (your previous improvement)
-      const prevEnd = currentWords[currentWords.length - 1].end;
-      const gap = w.start - prevEnd;
-      const extension = Math.min(gap / 2, 0.2);
-      flush(prevEnd + extension);
       currentStart = w.start;
     }
 
@@ -295,12 +285,178 @@ function mergeSegmentsToSentences(segments) {
     }
   }
 
-  // leftover (guaranteed <= MAX_PART_SECONDS by the isTooLong check above)
+  // leftover
   if (currentWords.length) {
     flush(currentWords[currentWords.length - 1].end);
   }
 
   return merged;
+}
+
+// Split an over-long sentence at natural semantic boundaries using the LLM,
+// falling back to a deterministic word-boundary cut if the LLM is unavailable.
+// Every returned part is guaranteed to be <= MAX_PART_SECONDS (TTS safety).
+async function splitLongSentenceWithLLM(sentence) {
+  const words = sentence.words || [];
+  const maxDur = MAX_PART_SECONDS;
+
+  const duration = words.length
+    ? words[words.length - 1].end - words[0].start
+    : sentence.end - sentence.start;
+
+  if (duration <= maxDur) return [sentence];
+  if (!sentence.text.trim()) return cutByWordBoundaries(sentence, maxDur);
+
+  try {
+    const llmParts = await llmFindSentenceSplits(sentence.text);
+    const mapped = mapLlmPartsToWords(llmParts, words);
+    if (mapped && mapped.length > 1) {
+      const result = [];
+      for (const sub of mapped) {
+        if (sub.end - sub.start > maxDur) {
+          result.push(...cutByWordBoundaries(sub, maxDur));
+        } else {
+          result.push(sub);
+        }
+      }
+      if (result.length) {
+        console.log(`  LLM split into ${result.length} parts: "${sentence.text}"`);
+        return result;
+      }
+    }
+  } catch (e) {
+    console.warn(`  LLM split failed for "${sentence.text}": ${e.message}`);
+  }
+
+  return cutByWordBoundaries(sentence, maxDur);
+}
+
+async function llmFindSentenceSplits(text) {
+  const response = await fetch('http://localhost:1234/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: LMSTUDIO_MODEL,
+      messages: [
+        {
+          role: 'user',
+          content: `The text below is a single long sentence from a video. It is too long to be processed as one dubbing part, so split it into several parts at natural semantic boundaries (after clauses, commas, conjunctions like and/but/because, etc.) so each part keeps its meaning and the parts join back together without losing sense.
+
+Strict rules:
+- Keep every word and punctuation EXACTLY as in the original. Do not add, remove, reorder or rephrase anything.
+- Keep the parts in the same order as the original.
+- Each part must be a natural, self-contained chunk.
+- Return ONLY a JSON array of the parts as strings, nothing else.
+
+Text:
+${text}`
+        }
+      ],
+      temperature: 0,
+      max_tokens: Math.min(Math.ceil(text.length * 1.5), 2048),
+      stop: ["<think>"],
+      chat_template_kwargs: { enable_thinking: false }
+    })
+  });
+
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+  const data = await response.json();
+  const content = data.choices[0].message.content.trim();
+
+  const start = content.indexOf('[');
+  const end = content.lastIndexOf(']');
+  if (start === -1 || end === -1 || end <= start) throw new Error('No JSON array in response');
+
+  const parsed = JSON.parse(content.slice(start, end + 1));
+  if (!Array.isArray(parsed)) throw new Error('Response is not an array');
+
+  return parsed.filter(p => typeof p === 'string' && p.trim());
+}
+
+// Map the LLM-split text parts back to the original word timestamps.
+// Returns null unless EVERY original word is covered exactly once
+// (any dropped/rephrased word makes the caller fall back to a safe cut).
+function mapLlmPartsToWords(llmParts, words) {
+  if (!llmParts.length || !words.length) return null;
+
+  const norm = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
+  const normWords = words.map(w => norm(w.word));
+
+  const result = [];
+  let k = 0;
+  let covered = 0;
+
+  for (const part of llmParts) {
+    const partNorms = part.split(/\s+/).map(norm).filter(Boolean);
+    if (!partNorms.length) continue;
+
+    let bestStart = -1;
+    let bestLen = 0;
+    for (let s = k; s < normWords.length; s++) {
+      let len = 0;
+      while (s + len < normWords.length && len < partNorms.length && normWords[s + len] === partNorms[len]) {
+        len++;
+      }
+      if (len > bestLen) {
+        bestLen = len;
+        bestStart = s;
+        if (len === partNorms.length) break;
+      }
+    }
+
+    if (bestLen === 0) return null;
+
+    const rangeWords = words.slice(bestStart, bestStart + bestLen);
+    result.push({
+      start: rangeWords[0].start,
+      end: rangeWords[rangeWords.length - 1].end,
+      text: rangeWords.map(x => x.word).join('').trim(),
+      words: rangeWords
+    });
+    covered += bestLen;
+    k = bestStart + bestLen;
+  }
+
+  if (covered !== normWords.length) return null;
+
+  return result;
+}
+
+// Deterministic fallback: cut at word boundaries so no part exceeds maxDur.
+function cutByWordBoundaries(sentence, maxDur) {
+  if (!sentence.words || !sentence.words.length) return [sentence];
+
+  const parts = [];
+  let cur = [];
+  let curStart = null;
+
+  for (const w of sentence.words) {
+    if (!cur.length) curStart = w.start;
+    if (cur.length && w.end - curStart > maxDur) {
+      const range = cur;
+      parts.push({
+        start: curStart,
+        end: range[range.length - 1].end,
+        text: range.map(x => x.word).join('').trim(),
+        words: range.slice()
+      });
+      cur = [];
+      curStart = w.start;
+    }
+    cur.push(w);
+  }
+
+  if (cur.length) {
+    parts.push({
+      start: curStart,
+      end: cur[cur.length - 1].end,
+      text: cur.map(x => x.word).join('').trim(),
+      words: cur.slice()
+    });
+  }
+
+  return parts;
 }
 
 async function step2_splitBySilence() {
@@ -416,8 +572,15 @@ async function step3_transcribeParts() {
       const sentences = mergeSegmentsToSentences([{ words }]);
       if (sentences.length) newParts = sentences;
     }
+
     for (const s of newParts) {
-      finalParts.push({ start: s.start, end: s.end, text: s.text, translated: '', file: '' });
+      const part = { start: s.start, end: s.end, text: s.text, translated: '', file: '' };
+      // keep whisper word timestamps only for parts that step 4 may split further
+      if (s.words && s.words.length) {
+        const dur = s.words[s.words.length - 1].end - s.words[0].start;
+        if (dur > MAX_PART_SECONDS) part.words = s.words;
+      }
+      finalParts.push(part);
     }
   }
 
@@ -435,6 +598,57 @@ async function step3_transcribeParts() {
   }
   saveParts();
 }
+
+async function step4_splitLongSentences() {
+  if (!loadParts()) throw new Error('No parts.json (run step 3 first)');
+
+  console.log('\n=== Step 4: Split long sentences with LLM ===');
+
+  const voiceDuration = getDuration(voiceFile);
+  if (!fs.existsSync(PARTS_DIR)) fs.mkdirSync(PARTS_DIR, { recursive: true });
+
+  const newParts = [];
+
+  for (const p of parts) {
+    const dur = p.words && p.words.length
+      ? p.words[p.words.length - 1].end - p.words[0].start
+      : p.end - p.start;
+
+    if (dur <= MAX_PART_SECONDS) {
+      delete p.words;
+      newParts.push(p);
+      continue;
+    }
+
+    if (!p.words || !p.words.length) {
+      console.warn(`  WARNING: part ${path.basename(p.file)} (${dur.toFixed(1)}s) has no word timestamps, keeping as-is`);
+      newParts.push(p);
+      continue;
+    }
+
+    const subs = await splitLongSentenceWithLLM({ start: p.start, end: p.end, text: p.text, words: p.words });
+
+    if (subs.length === 1) {
+      newParts.push(p);
+      continue;
+    }
+
+    const base = path.basename(p.file, path.extname(p.file));
+    for (let si = 0; si < subs.length; si++) {
+      const sub = subs[si];
+      const filename = `${base}_${si}.wav`;
+      const cutStart = Math.max(0, sub.start - PADDING_SECONDS);
+      const cutEnd = voiceDuration ? Math.min(voiceDuration, sub.end + PADDING_SECONDS) : sub.end + PADDING_SECONDS;
+      console.log(`  Cut: ${filename} (${sub.start.toFixed(2)}s - ${sub.end.toFixed(2)}s)`);
+      run(`ffmpeg -i "${voiceFile}" -ss ${cutStart} -to ${cutEnd} -c copy "${path.join(PARTS_DIR, filename)}" -y`);
+      newParts.push({ start: sub.start, end: sub.end, text: sub.text, translated: '', file: path.join(PARTS_DIR, filename) });
+    }
+  }
+
+  parts = newParts;
+  saveParts();
+}
+
 // Make corrections to this text and restore it as good as possible.
 const rules = `You are professional translator, your task is to translate text.
 Keep same style for translation as in original so not only words are translated but also sence and emotion and style of speech are preserved.
@@ -858,7 +1072,17 @@ async function main() {
     if (SKIP_TO_STEP_FINAL <= 2) await step2_splitBySilence();
     if (SKIP_TO_STEP_FINAL <= 3) await step3_transcribeParts();
 
-    // Step 4 was removed from the pipeline
+    if (SKIP_TO_STEP_FINAL <= 4) {
+      loadedModelId = await loadLMStudioModel(LMSTUDIO_MODEL);
+      try {
+        await step4_splitLongSentences();
+      } finally {
+        if (loadedModelId) {
+          await unloadLMStudioModel(loadedModelId);
+          loadedModelId = null;
+        }
+      }
+    }
 
     if (SKIP_TO_STEP <= 5) {
       loadedModelId = await loadLMStudioModel(LMSTUDIO_MODEL);
