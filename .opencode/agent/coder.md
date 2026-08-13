@@ -1,7 +1,6 @@
 ---
 name: coder
 description: Expert developer for code generation and modification
-model: locallmstudio/qwen/qwen3.6-35b-a3b
 mode: subagent
 permission:
   edit: allow

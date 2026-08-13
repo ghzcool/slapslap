@@ -446,93 +446,7 @@ Do not translate technical terms that you dont understand meaning in current con
 Use words instead of numbers like "четвёртое июля" and not "4 июля".
 Translation should not be longer than original text or voicover will be out of sync.`;
 
-async function fetchStream(body) {
-  const res = await fetch('http://localhost:1234/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Connection': 'close'
-    },
-    body: JSON.stringify({
-      ...body,
-      stream: true
-    })
-  });
-
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
-  }
-
-  const decoder = new TextDecoder('utf-8');
-
-  let result = '';
-  let buffer = '';
-
-  for await (const chunk of res.body) {
-    // 🔥 decode Uint8Array correctly
-    buffer += decoder.decode(chunk, { stream: true });
-
-    // split complete SSE lines
-    const lines = buffer.split('\n');
-
-    // keep incomplete line for next chunk
-    buffer = lines.pop();
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-
-      if (!trimmed.startsWith('data:')) continue;
-
-      const data = trimmed.replace(/^data:\s*/, '');
-
-      if (data === '[DONE]') {
-        return result.trim();
-      }
-
-      try {
-        const json = JSON.parse(data);
-
-        // OpenAI-compatible streaming format
-        const token =
-          json.choices?.[0]?.delta?.content ??
-          json.choices?.[0]?.text ??
-          '';
-
-        if (token) {
-          process.stdout.write(token);
-          result += token;
-        }
-      } catch (e) {
-        // partial JSON can happen between chunks
-      }
-    }
-  }
-
-  return result.trim();
-}
-
-async function initContext(fullText) {
-  return await fetchStream({
-    model: LMSTUDIO_MODEL,
-      messages: [
-        {
-          role: 'user',
-          content: `
-          rules: ${rules}
-
-          Translate text to ${TRANSLATE_LANGUAGE}. Output only the translation, nothing else.
-		  
-		  Full text:
-          ` + 
-		  fullText
-        }
-      ],
-      temperature: 0,
-      chat_template_kwargs: { enable_thinking: false }
-  });
-}
-
-async function translateWithLLM(text, fullText, translatedFullText, duration) {
+async function translateWithLLM(text, context, duration) {
   try {
     const response = await fetch('http://localhost:1234/v1/chat/completions', {
       method: 'POST',
@@ -543,17 +457,17 @@ async function translateWithLLM(text, fullText, translatedFullText, duration) {
           {
             role: 'user',
             content: `
-            Here are full text so you understand context of translation: '${fullText}'
-
-            Here are full translated text so you understand context of translation: '${translatedFullText}'
-            
             rules: ${rules}
+
+            Here are previous phrases of the conversation with their translations so you understand the context:
+
+            ${context || '(no previous context yet)'}
 
             Original voice duration for current part is: ${duration} seconds.
             Try to keep translation duration and amount of syllables similar by adapting translation if needed.
             Do not make translation longer or with more syllables than original, if it's longer, adapt it or rephrase to fit duration.
-            
-            Translate this part of text to ${TRANSLATE_LANGUAGE}. Output only translation AND ONLY FOR THIS PART and nothing else. IMPORTANT: translate only this part! Translation should not be longer than original text. If you add something from full text except this part, I will put you in jail!
+
+            Translate this part of text to ${TRANSLATE_LANGUAGE}. Output only translation AND ONLY FOR THIS PART and nothing else. IMPORTANT: translate only this part! Translation should not be longer than original text. If you add something from context except this part, I will put you in jail!
             
 			Return only translation and nothing else!
 			Translate ONLY this text: '${text}'`
@@ -620,26 +534,19 @@ async function step5_translate() {
 
   console.log(`\n=== Step 5: Translate ${parts.length} parts ===`);
 
-  const fullText = parts.map(p => p.text).join('\n');
-
-  console.log('Initializing context...');
-  let translatedFullText;
-  try {
-    translatedFullText = await initContext(fullText);
-  } catch (e) {
-    console.error('Failed to initialize context (LLM may be unavailable):', e.message);
-    console.error('Continuing without context — individual translations may be less accurate.');
-    translatedFullText = '';
-  }
-
-  console.log(translatedFullText);
-
-  for (const p of parts) {
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
     if (p.translated) continue;
+
+    const context = parts
+      .slice(0, i)
+      .filter(prev => prev.text && prev.translated)
+      .map(prev => `"${prev.text}" : "${prev.translated}"`)
+      .join('\n');
 
     console.log(`O:  ${p.text}`);
 
-    p.translated = await translateWithLLM(p.text, fullText, translatedFullText, (p.end - p.start).toFixed(2));
+    p.translated = await translateWithLLM(p.text, context, (p.end - p.start).toFixed(2));
     
     console.log(`T:  ${p.translated}`);
 

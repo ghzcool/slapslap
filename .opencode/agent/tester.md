@@ -1,7 +1,6 @@
 ---
 name: tester
 description: Quality assurance specialist for testing and validation
-model: locallmstudio/qwen/qwen3.6-35b-a3b
 mode: subagent
 permission:
   edit: deny
