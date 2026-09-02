@@ -96,7 +96,7 @@ const SILENCE_NOISE_DB = -25;
 const VOLUME_MIN_DB = -40;
 const MIN_PART_SECONDS = 0.1;
 const PADDING_SECONDS = 0.1;
-const MAX_PART_SECONDS = 15;
+const MAX_PART_SECONDS = 13;
 
 function getLMStudioHeaders() {
   const headers = { 'Content-Type': 'application/json' };
@@ -834,7 +834,7 @@ async function step6_generateAudio() {
         ? 'generate_audio'
         : './generate_audio';
 
-    const cmd = `${generate_audio} --model-dir models/base-1.7b --text="${textEscaped}" --ref-audio "${p.file}" --language ${VOICEOVER_LANGUAGE} --output "${out}" --duration ${duration * 2} --repetition-penalty 2`;
+    const cmd = `${generate_audio} --model-dir models/base-1.7b --text="${textEscaped}" --ref-audio "${p.file}" --language ${VOICEOVER_LANGUAGE} --output "${out}" --duration ${duration * 1.5} --repetition-penalty 2`;
     console.log(`  Generating (${duration}s): ${p.translated}`);
     run(cmd);
   }
