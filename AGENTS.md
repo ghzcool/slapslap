@@ -11,6 +11,11 @@ models/base-1.7b/ # Qwen3-TTS weights (large, gitignored)
 venv-ml/          # Python ML environment (demucs, whisper)
 work/             # Runtime working directory (gitignored)
 TTS_RS_README.md  # TTS setup reference
+voxcpm_worker.py  # VoxCPM2 batch worker (default voice engine)
+venv-voxcpm/      # VoxCPM2 Python env, created by setup.ps1 (gitignored)
+models/VoxCPM2/   # VoxCPM2 weights, downloaded by setup.ps1 (gitignored)
+requirements.txt  # VoxCPM2 Python deps
+setup.ps1 / setup.bat # one-time project-local env + model setup
 ```
 
 ## Run
@@ -33,9 +38,10 @@ npx slapslap sample.mp4                        # runs all steps, default languag
 npx slapslap sample.mp4 --method qwen3         # use the old Qwen3-TTS generate_audio.exe engine
 ```
 
-- Default voice engine is **VoxCPM2**, run through `C:\fun\voice-clone\.venv`; `--method qwen3` selects the old Qwen3-TTS `generate_audio.exe`.
+- Default voice engine is **VoxCPM2**, run through the project-local `venv-voxcpm\`; `--method qwen3` selects the old Qwen3-TTS `generate_audio.exe`.
 - `venv-ml` must be activated with CUDA support. Demucs and whisper are installed here.
 - LM Studio must be running on `http://localhost:1234` before step 5.
+- First run: execute `setup.bat` (or `setup.ps1`) once to create `venv-voxcpm/` and download `models/VoxCPM2/` for the default VoxCPM2 engine.
 
 ## Key constraints
 
@@ -49,7 +55,8 @@ npx slapslap sample.mp4 --method qwen3         # use the old Qwen3-TTS generate_
 - Demucs output path is `work/audio/demucs/htdemucs/<basename>/vocals.wav` and `no_vocals.wav`.
 - Steps 2–3 split `voice.wav` into voice parts by silence (`ffmpeg silencedetect`) and transcribe each part individually with Whisper — the whole-track `transcript.json` / `voice.json` is no longer produced or required.
 - `generate_audio.exe` is called with `--ref-audio` pointing to each original part for voice cloning — do not change the ref-audio logic.
-- Step 6 uses VoxCPM2 by default (`voxcpm_worker.py` run through `C:\fun\voice-clone\.venv\Scripts\python.exe`, model `openbmb/VoxCPM2`, reference audio = each original part wav); `--method qwen3` restores the old `generate_audio.exe` engine; `TTS_METHOD` env var overrides; VoxCPM runs in `reference` mode by default (`VOXCPM_MODE=ultimate` uses the original transcript as prompt).
+- Step 6 uses VoxCPM2 by default (`voxcpm_worker.py` run through `venv-voxcpm\Scripts\python.exe`, model `openbmb/VoxCPM2`, reference audio = each original part wav); `--method qwen3` restores the old `generate_audio.exe` engine; `TTS_METHOD` env var overrides; VoxCPM runs in `reference` mode by default (`VOXCPM_MODE=ultimate` uses the original transcript as prompt).
+- The project is self-contained: apart from documented prerequisites (system `ffmpeg`, LM Studio at `http://localhost:1234`, `venv-ml`), no path outside the repo is used. VoxCPM2's env and model live in `venv-voxcpm/` and `models/VoxCPM2/` and are created by `setup.ps1`.
 
 ## Subagent workflow
 

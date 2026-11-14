@@ -1,0 +1,2 @@
+# VoxCPM2 voice cloning engine. torch/torchaudio are installed separately by setup.ps1.
+voxcpm==2.0.3

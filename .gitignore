@@ -1,6 +1,8 @@
 /models/base-1.7b/model.safetensors
+/models/VoxCPM2
 /work
 /venv-ml
+/venv-voxcpm
 /*.mp4
 !/sample.mp4
 

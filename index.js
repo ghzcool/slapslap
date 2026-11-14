@@ -93,9 +93,11 @@ if (TTS_METHOD !== 'voxcpm' && TTS_METHOD !== 'qwen3') {
   process.exit(1);
 }
 
-const VOXCPM_PYTHON = process.env.VOXCPM_PYTHON || 'C:\\fun\\voice-clone\\.venv\\Scripts\\python.exe';
+const VOXCPM_PYTHON = process.env.VOXCPM_PYTHON || (process.platform === 'win32'
+  ? path.join(__dirname, 'venv-voxcpm', 'Scripts', 'python.exe')
+  : path.join(__dirname, 'venv-voxcpm', 'bin', 'python'));
 const VOXCPM_WORKER = path.join(__dirname, 'voxcpm_worker.py');
-const VOXCPM_MODEL = process.env.VOXCPM_MODEL || 'openbmb/VoxCPM2';
+const VOXCPM_MODEL = process.env.VOXCPM_MODEL || path.join(__dirname, 'models', 'VoxCPM2');
 const VOXCPM_DEVICE = process.env.VOXCPM_DEVICE || DEVICE;
 const VOXCPM_MODE = process.env.VOXCPM_MODE || 'reference';
 const VOXCPM_CFG = parseFloat(process.env.VOXCPM_CFG || '2.0');
@@ -865,7 +867,7 @@ async function step6_generateAudioQwen3() {
 
 async function step6_generateAudioVoxcpm() {
   if (!fs.existsSync(VOXCPM_PYTHON)) {
-    throw new Error(`VoxCPM python not found: ${VOXCPM_PYTHON} (set VOXCPM_PYTHON or use --method qwen3)`);
+    throw new Error(`VoxCPM python not found: ${VOXCPM_PYTHON}. Run setup.ps1 (or set VOXCPM_PYTHON, or use --method qwen3).`);
   }
   if (!fs.existsSync(VOXCPM_WORKER)) {
     throw new Error(`VoxCPM worker not found: ${VOXCPM_WORKER}`);
@@ -901,7 +903,7 @@ async function step6_generateAudioVoxcpm() {
 
   console.log(`  Running VoxCPM2 for ${jobs.length} parts (mode: ${VOXCPM_MODE})...`);
   const optimizeFlag = VOXCPM_OPTIMIZE ? ' --optimize' : '';
-  const cmd = `"${VOXCPM_PYTHON}" "${VOXCPM_WORKER}" --jobs "${jobsFile}" --status "${statusFile}" --model ${VOXCPM_MODEL} --device ${VOXCPM_DEVICE}${optimizeFlag}`;
+  const cmd = `"${VOXCPM_PYTHON}" "${VOXCPM_WORKER}" --jobs "${jobsFile}" --status "${statusFile}" --model "${VOXCPM_MODEL}" --device ${VOXCPM_DEVICE}${optimizeFlag}`;
   run(cmd);
 
   let ok = 0;
