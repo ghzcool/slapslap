@@ -5,75 +5,71 @@ const { execSync, spawn } = require('child_process');
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  let videoFile = null;
-  let language = null;
+  const positionals = [];
   let skipToStep = 0;
   let dubOnly = false;
   let model = null;
+  let method = null;
+
   let i = 0;
-
-  // First non-flag positional arg = video file
-  while (i < args.length && args[i].startsWith('-')) {
-    i++;
-  }
-  if (i < args.length) {
-    videoFile = args[i];
-    i++;
-  }
-
-  // Second non-flag positional arg = language
-  while (i < args.length && args[i].startsWith('-')) {
-    i++;
-  }
-  if (i < args.length) {
-    language = args[i];
-    i++;
-  }
-
-  // Now parse remaining flags in any order
   while (i < args.length) {
     const arg = args[i];
-    switch (arg) {
-      case '-d':
-        dubOnly = true;
-        break;
-      case '-s':
-        i++;
-        if (i >= args.length) {
-          console.error('Error: -s requires a step number (1-9)');
-          process.exit(1);
-        }
-        skipToStep = parseInt(args[i]);
+
+    if (arg === '-s' || arg === '-m' || arg === '--method') {
+      i++;
+      if (i >= args.length) {
+        console.error(`Error: ${arg} requires a value`);
+        process.exit(1);
+      }
+      const val = args[i];
+      if (arg === '-s') {
+        skipToStep = parseInt(val);
         if (isNaN(skipToStep) || skipToStep < 1 || skipToStep > 9) {
           console.error('Error: skip-to-step must be 1-9');
           process.exit(1);
         }
-        break;
-      case '-m':
-        i++;
-        if (i >= args.length) {
-          console.error('Error: -m requires a model name');
+      } else if (arg === '-m') {
+        model = val;
+      } else {
+        method = String(val).toLowerCase();
+        if (method !== 'voxcpm' && method !== 'qwen3') {
+          console.error("Error: --method must be 'voxcpm' or 'qwen3'");
           process.exit(1);
         }
-        model = args[i];
-        break;
-      default:
-        console.error(`Error: unknown option '${arg}'`);
-        console.error('Usage: npx slapslap <video-file> [language] [-d] [-s <step>] [-m <model>]');
-        console.error('  video-file   Input video file');
-        console.error('  language     Target language (default: russian)');
-        console.error('  -d           Dub mode: skip adding muted original voice (step 9)');
-        console.error('  -s <step>    Skip to step (1-9)');
-        console.error('  -m <model>   LLM model to use (default: qwen/qwen3.6-35b-a3b)');
-        process.exit(1);
+      }
+      i++;
+      continue;
     }
+
+    if (arg === '-d') {
+      dubOnly = true;
+      i++;
+      continue;
+    }
+
+    if (arg.startsWith('-')) {
+      console.error(`Error: unknown option '${arg}'`);
+      console.error('Usage: npx slapslap <video-file> [language] [-d] [-s <step>] [-m <model>] [--method <engine>]');
+      console.error('  video-file   Input video file');
+      console.error('  language     Target language (default: russian)');
+      console.error('  -d           Dub mode: skip adding muted original voice (step 9)');
+      console.error('  -s <step>    Skip to step (1-9)');
+      console.error('  -m <model>   LLM model to use (default: qwen/qwen3.6-35b-a3b)');
+      console.error('  --method <engine>  TTS engine: voxcpm (default) or qwen3');
+      process.exit(1);
+    }
+
+    positionals.push(arg);
     i++;
   }
 
-  return { videoFile, language, skipToStep, dubOnly, model };
+  const videoFile = positionals[0] ?? null;
+  const language = positionals[1] ?? null;
+
+  return { videoFile, language, skipToStep, dubOnly, model, method };
 }
 
-const { videoFile: INPUT_VIDEO, language: LANGUAGE, skipToStep: SKIP_TO_STEP, dubOnly, model} = parseArgs();
+const { videoFile: INPUT_VIDEO, language: LANGUAGE, skipToStep: SKIP_TO_STEP, dubOnly, model, method } = parseArgs();
 
 if (!INPUT_VIDEO) {
   console.error('Usage: npx slapslap <video-file> [language] [-d] [-s <step>]');
@@ -90,6 +86,24 @@ const LMSTUDIO_V1_API = `${LMSTUDIO_API_URL}/api/v1`;
 const LMSTUDIO_MODEL = process.env.LM_MODEL || 'qwen/qwen3.6-35b-a3b';
 const LM_API_TOKEN = process.env.LM_API_TOKEN ?? 'none';
 const DEVICE = process.env.DEVICE ?? 'cuda'; // 'cuda' or 'cpu'
+
+const TTS_METHOD = (process.env.TTS_METHOD || method || 'voxcpm').toLowerCase();
+if (TTS_METHOD !== 'voxcpm' && TTS_METHOD !== 'qwen3') {
+  console.error("Error: TTS method must be 'voxcpm' or 'qwen3'");
+  process.exit(1);
+}
+
+const VOXCPM_PYTHON = process.env.VOXCPM_PYTHON || 'C:\\fun\\voice-clone\\.venv\\Scripts\\python.exe';
+const VOXCPM_WORKER = path.join(__dirname, 'voxcpm_worker.py');
+const VOXCPM_MODEL = process.env.VOXCPM_MODEL || 'openbmb/VoxCPM2';
+const VOXCPM_DEVICE = process.env.VOXCPM_DEVICE || DEVICE;
+const VOXCPM_MODE = process.env.VOXCPM_MODE || 'reference';
+const VOXCPM_CFG = parseFloat(process.env.VOXCPM_CFG || '2.0');
+const VOXCPM_TIMESTEPS = parseInt(process.env.VOXCPM_TIMESTEPS || '10');
+const VOXCPM_MAX_CHARS = parseInt(process.env.VOXCPM_MAX_CHARS || '220');
+const VOXCPM_GAP = parseFloat(process.env.VOXCPM_GAP || '0.15');
+const VOXCPM_SEED = parseInt(process.env.VOXCPM_SEED || '42');
+const VOXCPM_OPTIMIZE = (process.env.VOXCPM_OPTIMIZE ?? 'true') !== 'false';
 
 const MIN_SILENCE_CUT = 1.0;
 const SILENCE_NOISE_DB = -25;
@@ -822,15 +836,24 @@ async function step5_translate() {
 async function step6_generateAudio() {
   if (!loadParts()) throw new Error('No parts.json');
   if (!fs.existsSync(TRANS_DIR)) fs.mkdirSync(TRANS_DIR, { recursive: true });
-  console.log('\n=== Step 6: Generate translated audio ===');
+  console.log(`\n=== Step 6: Generate translated audio (method: ${TTS_METHOD}) ===`);
+
+  if (TTS_METHOD === 'voxcpm') {
+    await step6_generateAudioVoxcpm();
+  } else {
+    await step6_generateAudioQwen3();
+  }
+}
+
+async function step6_generateAudioQwen3() {
   for (const p of parts) {
     const out = path.join(TRANS_DIR, path.basename(p.file));
     const duration = Math.ceil(p.end - p.start);
     const textEscaped = p.translated.replace(/"/g, '\\"');
     const refTextEscaped = p.text.replace(/"/g, '\\"'); //  --ref-text="${refTextEscaped}"
-    
-  const generate_audio =
-    process.platform === 'win32'
+
+    const generate_audio =
+      process.platform === 'win32'
         ? 'generate_audio'
         : './generate_audio';
 
@@ -838,6 +861,62 @@ async function step6_generateAudio() {
     console.log(`  Generating (${duration}s): ${p.translated}`);
     run(cmd);
   }
+}
+
+async function step6_generateAudioVoxcpm() {
+  if (!fs.existsSync(VOXCPM_PYTHON)) {
+    throw new Error(`VoxCPM python not found: ${VOXCPM_PYTHON} (set VOXCPM_PYTHON or use --method qwen3)`);
+  }
+  if (!fs.existsSync(VOXCPM_WORKER)) {
+    throw new Error(`VoxCPM worker not found: ${VOXCPM_WORKER}`);
+  }
+
+  const jobs = [];
+  for (const p of parts) {
+    const out = path.join(TRANS_DIR, path.basename(p.file));
+    jobs.push({
+      asset: path.basename(p.file),
+      text: p.translated,
+      ref: path.resolve(p.file),
+      out: path.resolve(out),
+      mode: VOXCPM_MODE,
+      prompt_text: VOXCPM_MODE === 'ultimate' ? p.text : '',
+      cfg: VOXCPM_CFG,
+      timesteps: VOXCPM_TIMESTEPS,
+      max_chars: VOXCPM_MAX_CHARS,
+      gap: VOXCPM_GAP,
+      seed: VOXCPM_SEED
+    });
+  }
+
+  if (!jobs.length) {
+    console.warn('  No parts to generate');
+    return;
+  }
+
+  const jobsFile = path.join(WORK_DIR, 'voxcpm_jobs.jsonl');
+  const statusFile = path.join(WORK_DIR, 'voxcpm_status.jsonl');
+  fs.writeFileSync(jobsFile, jobs.map(j => JSON.stringify(j)).join('\n') + '\n');
+  try { fs.unlinkSync(statusFile); } catch (e) {}
+
+  console.log(`  Running VoxCPM2 for ${jobs.length} parts (mode: ${VOXCPM_MODE})...`);
+  const optimizeFlag = VOXCPM_OPTIMIZE ? ' --optimize' : '';
+  const cmd = `"${VOXCPM_PYTHON}" "${VOXCPM_WORKER}" --jobs "${jobsFile}" --status "${statusFile}" --model ${VOXCPM_MODEL} --device ${VOXCPM_DEVICE}${optimizeFlag}`;
+  run(cmd);
+
+  let ok = 0;
+  let missing = 0;
+  for (const p of parts) {
+    const out = path.join(TRANS_DIR, path.basename(p.file));
+    if (fs.existsSync(out) && fs.statSync(out).size > 1000) {
+      ok++;
+    } else {
+      missing++;
+      console.warn(`  WARNING: no VoxCPM output for ${path.basename(p.file)}`);
+    }
+  }
+  console.log(`  VoxCPM2 done: ${ok} generated, ${missing} missing`);
+  if (ok === 0) throw new Error('VoxCPM2 produced no audio');
 }
 
 function getDuration(file) {

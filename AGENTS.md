@@ -16,21 +16,24 @@ TTS_RS_README.md  # TTS setup reference
 ## Run
 
 ```
-npx slapslap <video-file> [language] [-d] [-s <step>]
+npx slapslap <video-file> [language] [-d] [-s <step>] [-m <model>] [--method <engine>]
 ```
 
 - `language` — target language (default: `russian`)
 - `-d` — dub mode: skip adding the muted original voice overlay in step 9
 - `-s <step>` — skip to step (1-9) for re-running
+- `--method <engine>` — TTS voice engine: `voxcpm` (default, VoxCPM2) or `qwen3` (old Qwen3-TTS `generate_audio.exe`)
 - Flags can appear anywhere in the argument list
 
 Examples:
 ```
 npx slapslap sample.mp4 russian -d -s 5
 npx slapslap -s 5 sample.mp4 japanese -d
-npx slapslap sample.mp4              # runs all steps, default language = russian
+npx slapslap sample.mp4                        # runs all steps, default language = russian, VoxCPM2 engine
+npx slapslap sample.mp4 --method qwen3         # use the old Qwen3-TTS generate_audio.exe engine
 ```
 
+- Default voice engine is **VoxCPM2**, run through `C:\fun\voice-clone\.venv`; `--method qwen3` selects the old Qwen3-TTS `generate_audio.exe`.
 - `venv-ml` must be activated with CUDA support. Demucs and whisper are installed here.
 - LM Studio must be running on `http://localhost:1234` before step 5.
 
@@ -46,6 +49,7 @@ npx slapslap sample.mp4              # runs all steps, default language = russia
 - Demucs output path is `work/audio/demucs/htdemucs/<basename>/vocals.wav` and `no_vocals.wav`.
 - Steps 2–3 split `voice.wav` into voice parts by silence (`ffmpeg silencedetect`) and transcribe each part individually with Whisper — the whole-track `transcript.json` / `voice.json` is no longer produced or required.
 - `generate_audio.exe` is called with `--ref-audio` pointing to each original part for voice cloning — do not change the ref-audio logic.
+- Step 6 uses VoxCPM2 by default (`voxcpm_worker.py` run through `C:\fun\voice-clone\.venv\Scripts\python.exe`, model `openbmb/VoxCPM2`, reference audio = each original part wav); `--method qwen3` restores the old `generate_audio.exe` engine; `TTS_METHOD` env var overrides; VoxCPM runs in `reference` mode by default (`VOXCPM_MODE=ultimate` uses the original transcript as prompt).
 
 ## Subagent workflow
 
