@@ -16,6 +16,7 @@ venv-voxcpm/      # VoxCPM2 Python env, created by setup.ps1 (gitignored)
 models/VoxCPM2/   # VoxCPM2 weights, downloaded by setup.ps1 (gitignored)
 requirements.txt  # VoxCPM2 Python deps
 setup.ps1 / setup.bat # one-time project-local env + model setup
+.env.example      # sample env file (copy to .env; .env is gitignored)
 ```
 
 ## Run
@@ -48,6 +49,8 @@ npx slapslap sample.mp4 --method qwen3         # use the old Qwen3-TTS generate_
 - `index.js` has no abstraction layer — all subprocess calls use `execSync` or `spawn` directly.
 - Step order matters: each step depends on output from the previous one.
 - `LM_MODEL` / `LM_MODEL_LARGE` env vars override the default LLM models.
+- Env vars can be provided via a project-local `.env` file (loaded at startup, no dependency); real env vars win over `.env`. See `.env.example`.
+- `LLM_PROVIDER` selects the translation LLM: `lmstudio` (default, local, no key) or `openrouter` (cloud, needs `OPENROUTER_API_KEY`, model via `OPENROUTER_MODEL`). LM Studio model load/unload is skipped for OpenRouter. All chat calls go through `llmChatCompletion()`.
 - `LM_API_TOKEN` env var is optional; defaults to `'none'` (no auth header).
 - The `rules` constant (line 272) is injected into every translation LLM prompt — changing it requires re-running the full pipeline.
 - `doubleCheckWithLLM` is commented out in `step5` by default.

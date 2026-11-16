@@ -3,6 +3,29 @@ const fs = require('fs');
 const path = require('path');
 const { execSync, spawn } = require('child_process');
 
+// Load variables from a project-local .env file (no external dependency).
+// Real environment variables always win over values defined in .env.
+function loadDotEnv(envPath = path.join(__dirname, '.env')) {
+  if (!fs.existsSync(envPath)) return;
+  const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+  for (let raw of lines) {
+    let line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (line.startsWith('export ')) line = line.slice('export '.length).trim();
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1).trim();
+    if (value.length >= 2) {
+      const q = value[0];
+      if ((q === '"' || q === "'") && value.endsWith(q)) value = value.slice(1, -1);
+    }
+    if (key && !(key in process.env)) process.env[key] = value;
+  }
+}
+
+loadDotEnv();
+
 function parseArgs() {
   const args = process.argv.slice(2);
   const positionals = [];
@@ -54,7 +77,7 @@ function parseArgs() {
       console.error('  language     Target language (default: russian)');
       console.error('  -d           Dub mode: skip adding muted original voice (step 9)');
       console.error('  -s <step>    Skip to step (1-9)');
-      console.error('  -m <model>   LLM model to use (default: qwen/qwen3.6-35b-a3b)');
+      console.error('  -m <model>   LLM model to use (overrides LM_MODEL / OPENROUTER_MODEL)');
       console.error('  --method <engine>  TTS engine: voxcpm (default) or qwen3');
       process.exit(1);
     }
@@ -81,10 +104,39 @@ const SKIP_TO_STEP_FINAL = SKIP_TO_STEP || 0;
 const TRANSLATE_LANGUAGE = LANGUAGE ?? 'russian';
 const VOICEOVER_LANGUAGE = LANGUAGE ?? 'russian';
 
-const LMSTUDIO_API_URL = 'http://localhost:1234';
+// --- LLM provider configuration ---
+// LLM_PROVIDER: 'lmstudio' (default, local server) or 'openrouter' (cloud)
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || 'lmstudio').toLowerCase();
+if (LLM_PROVIDER !== 'lmstudio' && LLM_PROVIDER !== 'openrouter') {
+  console.error("Error: LLM_PROVIDER must be 'lmstudio' or 'openrouter'");
+  process.exit(1);
+}
+const IS_OPENROUTER = LLM_PROVIDER === 'openrouter';
+const LLM_PROVIDER_LABEL = IS_OPENROUTER ? 'OpenRouter' : 'LM Studio';
+
+const stripTrailingSlash = (url) => String(url).replace(/\/+$/, '');
+
+// LM Studio (local) settings
+const LMSTUDIO_API_URL = stripTrailingSlash(process.env.LMSTUDIO_API_URL || 'http://localhost:1234');
 const LMSTUDIO_V1_API = `${LMSTUDIO_API_URL}/api/v1`;
-const LMSTUDIO_MODEL = process.env.LM_MODEL || 'qwen/qwen3.6-35b-a3b';
+const LM_MODEL = process.env.LM_MODEL || 'qwen/qwen3.6-35b-a3b';
 const LM_API_TOKEN = process.env.LM_API_TOKEN ?? 'none';
+
+const WHISPER_MODEL = process.env.WHISPER_MODEL ?? 'large-v3-turbo';
+
+// OpenRouter (cloud) settings
+const OPENROUTER_API_URL = stripTrailingSlash(process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1');
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini';
+const OPENROUTER_SITE_URL = process.env.OPENROUTER_SITE_URL || '';
+const OPENROUTER_SITE_NAME = process.env.OPENROUTER_SITE_NAME || 'SlapSlap';
+
+// Effective endpoint + model (CLI -m overrides env)
+const LLM_API_URL = IS_OPENROUTER ? OPENROUTER_API_URL : `${LMSTUDIO_API_URL}/v1`;
+const LLM_MODEL = model || (IS_OPENROUTER ? OPENROUTER_MODEL : LM_MODEL);
+// Reasoning models need headroom: never request fewer than this many tokens.
+const LLM_MIN_MAX_TOKENS = parseInt(process.env.LLM_MIN_MAX_TOKENS || '1024', 10) || 1024;
+
 const DEVICE = process.env.DEVICE ?? 'cuda'; // 'cuda' or 'cpu'
 
 const TTS_METHOD = (process.env.TTS_METHOD || method || 'voxcpm').toLowerCase();
@@ -114,11 +166,15 @@ const MIN_PART_SECONDS = 0.1;
 const PADDING_SECONDS = 0.1;
 const MAX_PART_SECONDS = 13;
 
-function getLMStudioHeaders() {
+function getLLMHeaders() {
   const headers = { 'Content-Type': 'application/json' };
-  if (LM_API_TOKEN) {
-    headers['Authorization'] = `Bearer ${LM_API_TOKEN}`;
+  if (IS_OPENROUTER) {
+    if (OPENROUTER_API_KEY) headers['Authorization'] = `Bearer ${OPENROUTER_API_KEY}`;
+    if (OPENROUTER_SITE_URL) headers['HTTP-Referer'] = OPENROUTER_SITE_URL;
+    if (OPENROUTER_SITE_NAME) headers['X-Title'] = OPENROUTER_SITE_NAME;
+    return headers;
   }
+  if (LM_API_TOKEN) headers['Authorization'] = `Bearer ${LM_API_TOKEN}`;
   return headers;
 }
 
@@ -126,7 +182,7 @@ async function loadLMStudioModel(modelKey) {
   console.log(`\n=== Loading model: ${modelKey} ===`);
   const response = await fetch(`${LMSTUDIO_V1_API}/models/load`, {
     method: 'POST',
-    headers: getLMStudioHeaders(),
+    headers: getLLMHeaders(),
     body: JSON.stringify({
       model: modelKey,
       context_length: 16384,
@@ -148,7 +204,7 @@ async function unloadLMStudioModel(instanceId) {
   console.log(`\n=== Unloading model: ${instanceId} ===`);
   const response = await fetch(`${LMSTUDIO_V1_API}/models/unload`, {
     method: 'POST',
-    headers: getLMStudioHeaders(),
+    headers: getLLMHeaders(),
     body: JSON.stringify({
       instance_id: instanceId
     })
@@ -160,6 +216,87 @@ async function unloadLMStudioModel(instanceId) {
   }
 
   console.log('Model unloaded');
+}
+
+function thinkingDisabledPayload() {
+  // LM Studio: disable Qwen-style thinking through the chat template.
+  // OpenRouter: use its unified reasoning switch (ignored by non-reasoning models).
+  return IS_OPENROUTER
+    ? { reasoning: { enabled: false } }
+    : { chat_template_kwargs: { enable_thinking: false } };
+}
+
+// Normalize assistant content across providers (string, or array of parts).
+function extractContent(data) {
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map(part => (typeof part === 'string' ? part : part?.text || '')).join('');
+  }
+  return '';
+}
+
+async function llmRequest(payload) {
+  const body = { model: LLM_MODEL, ...payload };
+  if (body.max_tokens != null) {
+    body.max_tokens = Math.max(Number(body.max_tokens) || 0, LLM_MIN_MAX_TOKENS);
+  }
+
+  const response = await fetch(`${LLM_API_URL}/chat/completions`, {
+    method: 'POST',
+    headers: getLLMHeaders(),
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`HTTP ${response.status}${errText ? `: ${errText}` : ''}`);
+  }
+
+  return response.json();
+}
+
+// Single place that talks to the configured chat-completions endpoint.
+// `payload` fields are merged over the defaults (model is always set here).
+// Reasoning models can burn the whole token budget on hidden reasoning and
+// return content: null, so an empty answer is retried once with thinking
+// disabled and a larger budget before failing with a clear error.
+async function llmChatCompletion(payload) {
+  let data = await llmRequest(payload);
+  let content = extractContent(data).trim();
+  if (content) return content;
+
+  const finish = data?.choices?.[0]?.finish_reason;
+  data = await llmRequest({
+    ...payload,
+    max_tokens: Math.max(Number(payload.max_tokens) || 0, LLM_MIN_MAX_TOKENS) * 2,
+    ...thinkingDisabledPayload()
+  });
+  content = extractContent(data).trim();
+  if (content) return content;
+
+  throw new Error(
+    `Empty response from ${LLM_PROVIDER_LABEL} model "${LLM_MODEL}"` +
+    (finish ? ` (finish_reason: ${finish})` : '') +
+    '. The model may be unable to disable reasoning — choose a non-reasoning model.'
+  );
+}
+
+// OpenRouter has no model load/unload step — just validate the key.
+async function loadLLMModel(modelKey) {
+  if (IS_OPENROUTER) {
+    if (!OPENROUTER_API_KEY) {
+      throw new Error('OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter');
+    }
+    console.log(`\n=== Using ${LLM_PROVIDER_LABEL} model: ${modelKey} ===`);
+    return null;
+  }
+  return loadLMStudioModel(modelKey);
+}
+
+async function unloadLLMModel(instanceId) {
+  if (IS_OPENROUTER || !instanceId) return;
+  return unloadLMStudioModel(instanceId);
 }
 
 const WORK_DIR = path.join(__dirname, 'work');
@@ -354,15 +491,11 @@ async function splitLongSentenceWithLLM(sentence) {
 }
 
 async function llmFindSentenceSplits(text) {
-  const response = await fetch('http://localhost:1234/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: LMSTUDIO_MODEL,
-      messages: [
-        {
-          role: 'user',
-          content: `The text below is a single long sentence from a video. It is too long to be processed as one dubbing part, so split it into the smallest number of natural parts (usually 2-3) at real semantic boundaries (after clauses, commas, conjunctions like and/but/because, etc.) so each part keeps its meaning and the parts join back together without losing sense.
+  const content = await llmChatCompletion({
+    messages: [
+      {
+        role: 'user',
+        content: `The text below is a single long sentence from a video. It is too long to be processed as one dubbing part, so split it into the smallest number of natural parts (usually 2-3) at real semantic boundaries (after clauses, commas, conjunctions like and/but/because, etc.) so each part keeps its meaning and the parts join back together without losing sense.
           If there are no good semantic boundaries, split at most logical place so that no part exceeds ${MAX_PART_SECONDS} seconds of speech.
 
 Strict rules:
@@ -374,19 +507,13 @@ Strict rules:
 
 Text:
 ${text}`
-        }
-      ],
-      temperature: 0,
-      max_tokens: Math.min(Math.ceil(text.length * 2), 4096),
-      stop: ["<think>"],
-      chat_template_kwargs: { enable_thinking: false }
-    })
+      }
+    ],
+    temperature: 0,
+    max_tokens: Math.min(Math.ceil(text.length * 2), 4096),
+    stop: ["<think>"],
+    ...thinkingDisabledPayload()
   });
-
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-  const data = await response.json();
-  const content = data.choices[0].message.content.trim();
 
   const start = content.indexOf('[');
   const end = content.lastIndexOf(']');
@@ -613,7 +740,7 @@ async function step3_transcribeParts() {
     const partDir = path.join(WORK_DIR, `whisper_${baseName}`);
     if (!fs.existsSync(partDir)) fs.mkdirSync(partDir, { recursive: true });
 
-    const cmd = `${python} -m whisper "${p.file}" --model large-v3 --output_format json --output_dir "${partDir}" --word_timestamps True --condition_on_previous_text False`;
+    const cmd = `${python} -m whisper "${p.file}" --model ${WHISPER_MODEL} --output_format json --output_dir "${partDir}" --word_timestamps True --condition_on_previous_text False`;
     run(cmd);
 
     const jsonFile = path.join(partDir, `${baseName}.json`);
@@ -725,15 +852,11 @@ Translation should not be longer than original text or voicover will be out of s
 
 async function translateWithLLM(text, context, duration) {
   try {
-    const response = await fetch('http://localhost:1234/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: LMSTUDIO_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: `
+    return await llmChatCompletion({
+      messages: [
+        {
+          role: 'user',
+          content: `
             rules: ${rules}
 
             Here are previous phrases of the conversation with their translations so you understand the context:
@@ -748,19 +871,14 @@ async function translateWithLLM(text, context, duration) {
             
 			Return only translation and nothing else!
 			Translate ONLY this text: '${text}'`
-          }
-        ],
+        }
+      ],
 
-        temperature: 0,
-        max_tokens: Math.ceil(text.length / 2),
-        stop: ["\n", "<think>"],
-        chat_template_kwargs: { enable_thinking: false }
-      })
+      temperature: 0,
+      max_tokens: Math.ceil(text.length / 2),
+      stop: ["\n", "<think>"],
+      ...thinkingDisabledPayload()
     });
-
-    const data = await response.json();
-
-    return data.choices[0].message.content.trim();
   } catch (error) {
     console.error('Translation failed:', error.message);
     return text;
@@ -769,15 +887,11 @@ async function translateWithLLM(text, context, duration) {
 
 async function doubleCheckWithLLM(text, translation) {
   try {
-    const response = await fetch('http://localhost:1234/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: LMSTUDIO_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: `I have a script that cut translated text and make pairs of original and translated text parts.
+    return await llmChatCompletion({
+      messages: [
+        {
+          role: 'user',
+          content: `I have a script that cut translated text and make pairs of original and translated text parts.
             This script sometimes fails and cut in wrong place so extra part of text is in translation.
             Your task is to double-check the translation and ensure it does not contain any extra text.
             Please return only the translation without extra text and without any explanations.
@@ -787,19 +901,14 @@ async function doubleCheckWithLLM(text, translation) {
 			
 			Original text: "${text}".
             Translated to ${TRANSLATE_LANGUAGE} text: "${translation}".`
-          }
-        ],
+        }
+      ],
 
-        temperature: 0,
-        max_tokens: Math.ceil(text.length / 2),
-        stop: ["\n", "<think>"],
-        chat_template_kwargs: { enable_thinking: false }
-      })
+      temperature: 0,
+      max_tokens: Math.ceil(text.length / 2),
+      stop: ["\n", "<think>"],
+      ...thinkingDisabledPayload()
     });
-
-    const data = await response.json();
-
-    return data.choices[0].message.content.trim();
   } catch (error) {
     console.error('Double check failed:', error.message);
     return text;
@@ -1201,24 +1310,24 @@ async function main() {
     if (SKIP_TO_STEP_FINAL <= 3) await step3_transcribeParts();
 
     if (SKIP_TO_STEP_FINAL <= 4) {
-      loadedModelId = await loadLMStudioModel(LMSTUDIO_MODEL);
+      loadedModelId = await loadLLMModel(LLM_MODEL);
       try {
         await step4_splitLongSentences();
       } finally {
         if (loadedModelId) {
-          await unloadLMStudioModel(loadedModelId);
+          await unloadLLMModel(loadedModelId);
           loadedModelId = null;
         }
       }
     }
 
     if (SKIP_TO_STEP <= 5) {
-      loadedModelId = await loadLMStudioModel(LMSTUDIO_MODEL);
+      loadedModelId = await loadLLMModel(LLM_MODEL);
       try {
         await step5_translate();
       } finally {
         if (loadedModelId) {
-          await unloadLMStudioModel(loadedModelId);
+          await unloadLLMModel(loadedModelId);
           loadedModelId = null;
         }
       }
@@ -1232,7 +1341,7 @@ async function main() {
     console.error('Error:', e.message);
     if (loadedModelId) {
       try {
-        await unloadLMStudioModel(loadedModelId);
+        await unloadLLMModel(loadedModelId);
       } catch (unloadError) {
         console.error('Failed to unload model:', unloadError.message);
       }
